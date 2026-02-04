@@ -7,6 +7,9 @@
   <style>
     html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
     #map { height: 100%; width: 100%; }
+    /* IMPORTANT: prevent global CSS from breaking Google tiles */
+    #map img { max-width: none !important; }
+
     .panel{
       position:absolute; top:12px; left:12px; z-index:5;
       background:rgba(255,255,255,0.96);
@@ -51,7 +54,7 @@
       <b>Legend</b><br/>
       <div><span class="swatch" style="background:#2563eb;"></span>Blue circles: existing chargers</div>
       <div><span class="swatch" style="background:#ef4444;"></span>Red arrows: new sites (P=10)</div>
-      <div><span class="swatch" style="background:#6b7280;"></span>Grey dots: demand (LSOA centroids)</div>
+      <div><span class="swatch" style="background:#6b7280;"></span>Grey dots: demand centroids</div>
       <div style="margin-top:6px;"><span class="swatch" style="background:#93c5fd;"></span>LSOA boundary fill</div>
     </div>
   </div>
@@ -60,10 +63,7 @@
     // ====== PUT YOUR KEY HERE ======
     const GMAPS_KEY = "AIzaSyAUproFl8jRStUlFwOKbQ8yh2CjNJ_H2c4";
 
-    // Build robust base URL so relative paths always resolve correctly
-    // (works for /ev-charging-location-allocation/driver_map.html and for subpaths)
     const BASE = new URL("./", window.location.href);
-
     const DATA_URLS = {
       lsoa:   new URL("data/processed/demand_lsoa_cardiff_exact.geojson", BASE).href,
       demand: new URL("data/processed/demand_points_cardiff_exact.geojson", BASE).href,
@@ -71,8 +71,7 @@
       news:   new URL("data/processed/new_sites_p10.geojson", BASE).href
     };
 
-    let map, info, trafficLayer;
-    let lsoaLayer;
+    let map, info, trafficLayer, lsoaLayer;
     let supplyMarkers = [], demandMarkers = [], newMarkers = [];
     let selectedDestination = null;
 
@@ -80,6 +79,16 @@
 
     function setStatus(msg) {
       document.getElementById("status").textContent = msg || "";
+    }
+
+    async function loadGeoJSON(url) {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) throw new Error(`Fetch failed: ${res.status}  ${url}`);
+      return await res.json();
+    }
+
+    function setMarkersVisible(markers, on) {
+      for (const m of markers) m.setMap(on ? map : null);
     }
 
     function circleSymbol(fillColor, scale) {
@@ -94,24 +103,12 @@
       };
     }
 
-    async function loadGeoJSON(url) {
-      const res = await fetch(url, { cache: "no-store" });
-      if (!res.ok) throw new Error(`Fetch failed: ${res.status}  ${url}`);
-      return await res.json();
-    }
-
-    function setMarkersVisible(markers, on) {
-      for (const m of markers) m.setMap(on ? map : null);
-    }
-
     function addPointMarkers(geojson, kind) {
       const feats = geojson.features || [];
       const markers = [];
 
       for (const f of feats) {
-        if (!f.geometry) continue;
-        if (f.geometry.type !== "Point") continue;
-
+        if (!f.geometry || f.geometry.type !== "Point") continue;
         const [lng, lat] = f.geometry.coordinates || [];
         if (typeof lat !== "number" || typeof lng !== "number") continue;
 
@@ -125,22 +122,9 @@
           });
           marker.addListener("click", () => {
             selectedDestination = marker.getPosition();
-            info.setContent(`<b>Existing charger</b><br/>Destination set. You can route with traffic.`);
+            info.setContent(`<b>Existing charger</b><br/>Destination set.`);
             info.open(map, marker);
             document.getElementById("btnRoute").disabled = false;
-          });
-        }
-
-        if (kind === "demand") {
-          const lsoa = (f.properties && (f.properties.LSOA21CD || f.properties.lsoa)) || "demand";
-          marker = new google.maps.Marker({
-            position: { lat, lng },
-            icon: circleSymbol("#6b7280", 4),
-            title: `Demand: ${lsoa}`
-          });
-          marker.addListener("click", () => {
-            info.setContent(`<b>Demand centroid</b><br/>LSOA: ${lsoa}`);
-            info.open(map, marker);
           });
         }
 
@@ -160,9 +144,18 @@
           });
           marker.addListener("click", () => {
             selectedDestination = marker.getPosition();
-            info.setContent(`<b>NEW site (P=10)</b><br/>id: ${sid || "(n/a)"}<br/>Destination set. You can route with traffic.`);
+            info.setContent(`<b>NEW site (P=10)</b><br/>id: ${sid || "(n/a)"}<br/>Destination set.`);
             info.open(map, marker);
             document.getElementById("btnRoute").disabled = false;
+          });
+        }
+
+        if (kind === "demand") {
+          const lsoa = (f.properties && (f.properties.LSOA21CD || f.properties.lsoa)) || "demand";
+          marker = new google.maps.Marker({
+            position: { lat, lng },
+            icon: circleSymbol("#6b7280", 4),
+            title: `Demand: ${lsoa}`
           });
         }
 
@@ -171,7 +164,6 @@
           markers.push(marker);
         }
       }
-
       return markers;
     }
 
@@ -189,8 +181,46 @@
       lyDemand.addEventListener("change", () => setMarkersVisible(demandMarkers, lyDemand.checked));
     }
 
+    // Safer bounds from GeoJSON (filters invalid coords)
+    function fitBoundsFromGeoJSONPolygon(geojson) {
+      const bounds = new google.maps.LatLngBounds();
+      let added = 0;
+
+      function addCoord(lng, lat) {
+        if (typeof lat !== "number" || typeof lng !== "number") return;
+        if (!isFinite(lat) || !isFinite(lng)) return;
+        if (lat < -85 || lat > 85) return;
+        if (lng < -180 || lng > 180) return;
+        bounds.extend({ lat, lng });
+        added++;
+      }
+
+      for (const f of (geojson.features || [])) {
+        const g = f.geometry;
+        if (!g) continue;
+
+        if (g.type === "Polygon") {
+          for (const ring of g.coordinates || []) {
+            for (const [lng, lat] of ring || []) addCoord(lng, lat);
+          }
+        } else if (g.type === "MultiPolygon") {
+          for (const poly of g.coordinates || []) {
+            for (const ring of poly || []) {
+              for (const [lng, lat] of ring || []) addCoord(lng, lat);
+            }
+          }
+        }
+      }
+
+      console.log("Bounds points added:", added);
+      if (added > 10) {
+        map.fitBounds(bounds);
+        return true;
+      }
+      return false;
+    }
+
     async function initMap() {
-      // Base map centered near Cardiff
       map = new google.maps.Map(document.getElementById("map"), {
         center: { lat: 51.4816, lng: -3.1791 },
         zoom: 11,
@@ -199,13 +229,17 @@
         fullscreenControl: true
       });
 
+      // DEBUG marker (you MUST see this)
+      new google.maps.Marker({
+        position: { lat: 51.4816, lng: -3.1791 },
+        title: "DEBUG: Cardiff center"
+      }).setMap(map);
+
       info = new google.maps.InfoWindow();
 
-      // Real-time traffic overlay (TrafficLayer)
       trafficLayer = new google.maps.TrafficLayer();
       trafficLayer.setMap(map);
 
-      // LSOA polygons as Data layer
       lsoaLayer = new google.maps.Data();
       lsoaLayer.setStyle({
         fillColor: "#93c5fd",
@@ -216,20 +250,11 @@
       });
       lsoaLayer.setMap(map);
 
-      lsoaLayer.addListener("click", (e) => {
-        const code = e.feature.getProperty("LSOA21CD") || e.feature.getProperty("lsoa21cd") || "";
-        const name = e.feature.getProperty("LSOA21NM") || e.feature.getProperty("lsoa21nm") || "";
-        info.setContent(`<b>LSOA</b><br/>${code}<br/>${name}`);
-        info.setPosition(e.latLng);
-        info.open(map);
-      });
-
       directionsService  = new google.maps.DirectionsService();
       directionsRenderer = new google.maps.DirectionsRenderer({ map, suppressMarkers: true });
 
       initLayersUI();
 
-      // Load data
       try {
         setStatus(
           "Loading GeoJSON...\n" +
@@ -246,36 +271,34 @@
         // Add polygons
         lsoaLayer.addGeoJson(lsoa);
 
-        // Fit bounds to polygons
-        const bounds = new google.maps.LatLngBounds();
-        lsoaLayer.forEach((f) => {
-          const geom = f.getGeometry();
-          if (!geom) return;
-          geom.forEachLatLng((latlng) => bounds.extend(latlng));
-        });
-        map.fitBounds(bounds);
+        // SAFER fitBounds
+        const ok = fitBoundsFromGeoJSONPolygon(lsoa);
+        if (!ok) {
+          // fallback
+          map.setCenter({ lat: 51.4816, lng: -3.1791 });
+          map.setZoom(11);
+        }
 
-        // Add markers
+        // Markers
         supplyMarkers = addPointMarkers(supply, "supply");
-        newMarkers    = addPointMarkers(news,   "new");
+        newMarkers    = addPointMarkers(news, "new");
         demandMarkers = addPointMarkers(demand, "demand");
-        setMarkersVisible(demandMarkers, false); // default off
+        setMarkersVisible(demandMarkers, false);
 
         setStatus(
           `Loaded.\n` +
           `LSOA features: ${(lsoa.features||[]).length}\n` +
           `Supply points: ${(supply.features||[]).length}\n` +
           `New points: ${(news.features||[]).length}\n` +
-          `Demand points: ${(demand.features||[]).length}\n` +
-          `\nToggle layers & click markers to interact.`
+          `Demand points: ${(demand.features||[]).length}\n\n` +
+          `If you only see blank: check adblock/network tiles.\n`
         );
       } catch (err) {
         console.error(err);
-        setStatus("FAILED to load GeoJSON.\n" + String(err));
+        setStatus("FAILED.\n" + String(err));
         alert(String(err));
       }
 
-      // Route button
       document.getElementById("btnRoute").addEventListener("click", () => {
         if (!selectedDestination) return;
 
@@ -314,10 +337,8 @@
       });
     }
 
-    // IMPORTANT: make callback visible on window
     window.initMap = initMap;
 
-    // Load Google Maps JS (TrafficLayer + Directions live here)
     (function loadGoogleMaps() {
       const s = document.createElement("script");
       s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GMAPS_KEY)}&callback=initMap&v=weekly`;
