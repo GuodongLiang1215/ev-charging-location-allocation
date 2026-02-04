@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Cardiff EV Charging – P=10 + Live Traffic</title>
+  <title>Cardiff EV Charging – P=10 + Live Traffic (Driver Local)</title>
   <style>
     html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
     #map { height: 100%; width: 100%; }
@@ -48,7 +48,7 @@
     <div class="small">Click a blue/red marker → set destination → “Route with traffic”.</div>
     <button id="btnRoute" class="btn" disabled>Route with traffic (from my location)</button>
     <div id="status" class="status"></div>
-    <div class="hint">Tip: traffic lines are clearer at zoom ≥ 11–12.</div>
+    <div class="hint">Tip: traffic lines are clearer at zoom ≥ 11–12. Driver view is locked to Cardiff.</div>
 
     <div class="legend">
       <b>Legend</b><br/>
@@ -63,6 +63,23 @@
     // ====== PUT YOUR KEY HERE ======
     const GMAPS_KEY = "AIzaSyAUproFl8jRStUlFwOKbQ8yh2CjNJ_H2c4";
 
+    // Debug switch (set true if you want a visible marker at Cardiff center)
+    const DEBUG = false;
+
+    // ✅ Cardiff bounding box (approx). Your earlier logs match this range well.
+    const CARDIFF_BOUNDS = {
+      south: 51.35,
+      west:  -3.44,
+      north: 51.64,
+      east:  -2.94
+    };
+
+    function inCardiff(lat, lng) {
+      return lat >= CARDIFF_BOUNDS.south && lat <= CARDIFF_BOUNDS.north &&
+             lng >= CARDIFF_BOUNDS.west  && lng <= CARDIFF_BOUNDS.east;
+    }
+
+    // Robust URL building for GitHub Pages
     const BASE = new URL("./", window.location.href);
     const DATA_URLS = {
       lsoa:   new URL("data/processed/demand_lsoa_cardiff_exact.geojson", BASE).href,
@@ -112,6 +129,9 @@
         const [lng, lat] = f.geometry.coordinates || [];
         if (typeof lat !== "number" || typeof lng !== "number") continue;
 
+        // ✅ driver local-only: skip points outside Cardiff
+        if (!inCardiff(lat, lng)) continue;
+
         let marker = null;
 
         if (kind === "supply") {
@@ -121,8 +141,12 @@
             title: "Existing charger"
           });
           marker.addListener("click", () => {
-            selectedDestination = marker.getPosition();
-            info.setContent(`<b>Existing charger</b><br/>Destination set.`);
+            const pos = marker.getPosition();
+            // extra safety
+            if (!inCardiff(pos.lat(), pos.lng())) return;
+
+            selectedDestination = pos;
+            info.setContent(`<b>Existing charger</b><br/>Destination set (Cardiff-only).`);
             info.open(map, marker);
             document.getElementById("btnRoute").disabled = false;
           });
@@ -143,8 +167,11 @@
             title: `NEW site (P=10) ${sid}`.trim()
           });
           marker.addListener("click", () => {
-            selectedDestination = marker.getPosition();
-            info.setContent(`<b>NEW site (P=10)</b><br/>id: ${sid || "(n/a)"}<br/>Destination set.`);
+            const pos = marker.getPosition();
+            if (!inCardiff(pos.lat(), pos.lng())) return;
+
+            selectedDestination = pos;
+            info.setContent(`<b>NEW site (P=10)</b><br/>id: ${sid || "(n/a)"}<br/>Destination set (Cardiff-only).`);
             info.open(map, marker);
             document.getElementById("btnRoute").disabled = false;
           });
@@ -156,6 +183,10 @@
             position: { lat, lng },
             icon: circleSymbol("#6b7280", 4),
             title: `Demand: ${lsoa}`
+          });
+          marker.addListener("click", () => {
+            info.setContent(`<b>Demand centroid</b><br/>${lsoa}`);
+            info.open(map, marker);
           });
         }
 
@@ -181,7 +212,7 @@
       lyDemand.addEventListener("change", () => setMarkersVisible(demandMarkers, lyDemand.checked));
     }
 
-    // Safer bounds from GeoJSON (filters invalid coords)
+    // Safer bounds from GeoJSON polygons
     function fitBoundsFromGeoJSONPolygon(geojson) {
       const bounds = new google.maps.LatLngBounds();
       let added = 0;
@@ -191,6 +222,10 @@
         if (!isFinite(lat) || !isFinite(lng)) return;
         if (lat < -85 || lat > 85) return;
         if (lng < -180 || lng > 180) return;
+
+        // local-only: keep bounds within Cardiff
+        if (!inCardiff(lat, lng)) return;
+
         bounds.extend({ lat, lng });
         added++;
       }
@@ -212,7 +247,6 @@
         }
       }
 
-      console.log("Bounds points added:", added);
       if (added > 10) {
         map.fitBounds(bounds);
         return true;
@@ -221,19 +255,30 @@
     }
 
     async function initMap() {
+      // ✅ Local-only map: restriction + zoom limits
       map = new google.maps.Map(document.getElementById("map"), {
         center: { lat: 51.4816, lng: -3.1791 },
-        zoom: 11,
+        zoom: 12,
+
+        minZoom: 11,
+        maxZoom: 17,
+
         mapTypeControl: false,
         streetViewControl: false,
-        fullscreenControl: true
+        fullscreenControl: true,
+
+        restriction: {
+          latLngBounds: CARDIFF_BOUNDS,
+          strictBounds: true
+        }
       });
 
-      // DEBUG marker (you MUST see this)
-      new google.maps.Marker({
-        position: { lat: 51.4816, lng: -3.1791 },
-        title: "DEBUG: Cardiff center"
-      }).setMap(map);
+      if (DEBUG) {
+        new google.maps.Marker({
+          position: { lat: 51.4816, lng: -3.1791 },
+          title: "DEBUG: Cardiff center"
+        }).setMap(map);
+      }
 
       info = new google.maps.InfoWindow();
 
@@ -243,17 +288,34 @@
       lsoaLayer = new google.maps.Data();
       lsoaLayer.setStyle({
         fillColor: "#93c5fd",
-        fillOpacity: 0.25,
+        fillOpacity: 0.18,
         strokeColor: "#2563eb",
-        strokeOpacity: 0.95,
-        strokeWeight: 2
+        strokeOpacity: 0.9,
+        strokeWeight: 1.5
       });
       lsoaLayer.setMap(map);
+
+      // Click LSOA to show properties (if exist)
+      lsoaLayer.addListener("click", (e) => {
+        const code = e.feature.getProperty("LSOA21CD") || e.feature.getProperty("lsoa21cd") || "";
+        const name = e.feature.getProperty("LSOA21NM") || e.feature.getProperty("lsoa21nm") || "";
+        info.setContent(`<b>LSOA</b><br/>${code || "(no code)"}<br/>${name || ""}`);
+        info.setPosition(e.latLng);
+        info.open(map);
+      });
 
       directionsService  = new google.maps.DirectionsService();
       directionsRenderer = new google.maps.DirectionsRenderer({ map, suppressMarkers: true });
 
       initLayersUI();
+
+      // Extra clamp (optional). strictBounds usually enough, but this makes it rock-solid.
+      let lastValidCenter = map.getCenter();
+      map.addListener("center_changed", () => {
+        const c = map.getCenter();
+        if (inCardiff(c.lat(), c.lng())) lastValidCenter = c;
+        else map.panTo(lastValidCenter);
+      });
 
       try {
         setStatus(
@@ -268,16 +330,20 @@
           loadGeoJSON(DATA_URLS.news),
         ]);
 
-        // Add polygons
+        // Polygons
         lsoaLayer.addGeoJson(lsoa);
 
-        // SAFER fitBounds
+        // Fit to LSOA within Cardiff
         const ok = fitBoundsFromGeoJSONPolygon(lsoa);
         if (!ok) {
-          // fallback
           map.setCenter({ lat: 51.4816, lng: -3.1791 });
-          map.setZoom(11);
+          map.setZoom(12);
         }
+
+        // After fitBounds, prevent zoom-out too far
+        google.maps.event.addListenerOnce(map, "idle", () => {
+          if (map.getZoom() < 11) map.setZoom(11);
+        });
 
         // Markers
         supplyMarkers = addPointMarkers(supply, "supply");
@@ -286,12 +352,12 @@
         setMarkersVisible(demandMarkers, false);
 
         setStatus(
-          `Loaded.\n` +
+          `Loaded (Cardiff-only).\n` +
           `LSOA features: ${(lsoa.features||[]).length}\n` +
           `Supply points: ${(supply.features||[]).length}\n` +
           `New points: ${(news.features||[]).length}\n` +
           `Demand points: ${(demand.features||[]).length}\n\n` +
-          `If you only see blank: check adblock/network tiles.\n`
+          `Tip: if you can't route, allow Location permission in browser.\n`
         );
       } catch (err) {
         console.error(err);
@@ -299,6 +365,7 @@
         alert(String(err));
       }
 
+      // Route button
       document.getElementById("btnRoute").addEventListener("click", () => {
         if (!selectedDestination) return;
 
@@ -329,7 +396,7 @@
             });
           },
           (err) => {
-            setStatus("Geolocation denied/unavailable.");
+            setStatus("Geolocation denied/unavailable.\nPlease allow Location permission (HTTPS required).");
             alert("Cannot access location: " + err.message);
           },
           { enableHighAccuracy: true, timeout: 8000 }
