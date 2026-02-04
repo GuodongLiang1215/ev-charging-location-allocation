@@ -3,109 +3,158 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Cardiff EV Charging – P=10 + Live Traffic (Driver Local)</title>
+  <title>Cardiff EV Driver – Chargers + Live Traffic</title>
   <style>
     html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
     #map { height: 100%; width: 100%; }
-    /* IMPORTANT: prevent global CSS from breaking Google tiles */
     #map img { max-width: none !important; }
 
     .panel{
       position:absolute; top:12px; left:12px; z-index:5;
       background:rgba(255,255,255,0.96);
       border:1px solid #ddd; border-radius:10px;
-      padding:10px 12px; width:340px;
+      padding:10px 12px; width:360px;
       box-shadow:0 4px 18px rgba(0,0,0,0.12);
     }
     .panel h3{ margin:6px 0 8px; font-size:14px; }
     .row{ display:flex; align-items:center; gap:8px; margin:6px 0; }
     .row input{ transform: translateY(1px); }
-    .legend{ margin-top:10px; font-size:12px; line-height:1.35; }
-    .swatch{ display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; border:1px solid rgba(0,0,0,0.2); }
+
+    .searchRow{ display:flex; gap:8px; margin:8px 0; }
+    .searchRow input{
+      flex:1; padding:8px 10px; border:1px solid #d1d5db; border-radius:8px; font-size:12px;
+    }
     .btn{
-      display:inline-block; margin-top:8px;
       background:#111827; color:#fff; border:none; border-radius:8px;
       padding:8px 10px; cursor:pointer; font-size:12px;
     }
+    .btn.secondary{ background:#374151; }
     .btn:disabled{ opacity:0.5; cursor:not-allowed; }
+
     .small{ color:#374151; font-size:12px; }
     .status{ margin-top:6px; font-size:12px; color:#111827; white-space:pre-wrap; }
     .hint{ margin-top:6px; font-size:12px; color:#6b7280; }
+
+    .listBox{
+      margin-top:10px;
+      border-top:1px solid #e5e7eb;
+      padding-top:10px;
+      max-height: 260px;
+      overflow:auto;
+    }
+    .listHeader{
+      display:flex; gap:8px; align-items:center; justify-content:space-between;
+      font-size:12px; color:#111827; margin-bottom:6px;
+    }
+    .pill{
+      border:1px solid #d1d5db;
+      padding:6px 8px;
+      border-radius:999px;
+      background:#fff;
+      cursor:pointer;
+      font-size:12px;
+    }
+    .pill.active{
+      background:#111827;
+      color:#fff;
+      border-color:#111827;
+    }
+    .item{
+      border:1px solid #e5e7eb;
+      border-radius:10px;
+      padding:8px 10px;
+      margin:6px 0;
+      cursor:pointer;
+      background:#fff;
+    }
+    .item:hover{ border-color:#cbd5e1; }
+    .itemTitle{ font-size:12px; font-weight:600; margin-bottom:4px; }
+    .itemMeta{ font-size:12px; color:#374151; display:flex; gap:10px; flex-wrap:wrap; }
+    .badge{
+      display:inline-block;
+      font-size:11px;
+      padding:2px 6px;
+      border-radius:999px;
+      background:#eef2ff;
+      color:#1e3a8a;
+      border:1px solid #c7d2fe;
+      margin-left:6px;
+    }
   </style>
 </head>
 <body>
   <div id="map"></div>
 
   <div class="panel">
-    <h3>Layers</h3>
+    <h3>Driver view (Cardiff only)</h3>
+
+    <div class="searchRow">
+      <input id="searchInput" placeholder="Search an address/place in Cardiff (e.g., Cardiff Castle)" />
+      <button id="btnSearch" class="btn">Search</button>
+    </div>
+
+    <div class="row">
+      <button id="btnMyLoc" class="btn secondary">Use my location</button>
+      <button id="btnRecommend" class="btn" disabled>Recommend best chargers (ETA)</button>
+    </div>
+
     <div class="row"><input id="lyTraffic" type="checkbox" checked><label for="lyTraffic">Live traffic</label></div>
-    <div class="row"><input id="lyLSOA" type="checkbox" checked><label for="lyLSOA">LSOA polygons (Cardiff)</label></div>
-    <div class="row"><input id="lySupply" type="checkbox" checked><label for="lySupply">Existing chargers (OCM)</label></div>
-    <div class="row"><input id="lyNew" type="checkbox" checked><label for="lyNew">New sites selected (P=10)</label></div>
-    <div class="row"><input id="lyDemand" type="checkbox"><label for="lyDemand">Demand centroids (LSOA)</label></div>
+    <div class="row"><input id="lySupply" type="checkbox" checked><label for="lySupply">Existing chargers</label></div>
 
-    <h3 style="margin-top:10px;">Driver demo (optional)</h3>
-    <div class="small">Click a blue/red marker → set destination → “Route with traffic”.</div>
-    <button id="btnRoute" class="btn" disabled>Route with traffic (from my location)</button>
     <div id="status" class="status"></div>
-    <div class="hint">Tip: traffic lines are clearer at zoom ≥ 11–12. Driver view is locked to Cardiff.</div>
+    <div class="hint">Tip: traffic lines are clearer at zoom ≥ 12. You can’t pan outside Cardiff.</div>
 
-    <div class="legend">
-      <b>Legend</b><br/>
-      <div><span class="swatch" style="background:#2563eb;"></span>Blue circles: existing chargers</div>
-      <div><span class="swatch" style="background:#ef4444;"></span>Red arrows: new sites (P=10)</div>
-      <div><span class="swatch" style="background:#6b7280;"></span>Grey dots: demand centroids</div>
-      <div style="margin-top:6px;"><span class="swatch" style="background:#93c5fd;"></span>LSOA boundary fill</div>
+    <div class="listBox">
+      <div class="listHeader">
+        <div><b>Best options</b> <span class="badge" id="countBadge">0</span></div>
+        <div>
+          <span id="sortETA" class="pill active">Sort: ETA</span>
+          <span id="sortDist" class="pill">Sort: Distance</span>
+        </div>
+      </div>
+      <div id="results"></div>
     </div>
   </div>
 
   <script>
-    // ====== PUT YOUR KEY HERE ======
     const GMAPS_KEY = "AIzaSyAUproFl8jRStUlFwOKbQ8yh2CjNJ_H2c4";
 
-    // Debug switch (set true if you want a visible marker at Cardiff center)
-    const DEBUG = false;
+    // Cardiff bounds (approx)
+    const CARDIFF_BOUNDS = { south: 51.35, west: -3.44, north: 51.64, east: -2.94 };
+    const CARDIFF_CENTER = { lat: 51.4816, lng: -3.1791 };
 
-    // ✅ Cardiff bounding box (approx). Your earlier logs match this range well.
-    const CARDIFF_BOUNDS = {
-      south: 51.35,
-      west:  -3.44,
-      north: 51.64,
-      east:  -2.94
+    // Data path (GitHub Pages friendly)
+    const BASE = new URL("./", window.location.href);
+    const DATA_URLS = {
+      supply: new URL("data/processed/supply_chargers_ocm.geojson", BASE).href
     };
+
+    // How many chargers to evaluate for ETA ranking
+    const TOP_N_CANDIDATES = 8;
+
+    let map, info, trafficLayer;
+    let supplyMarkers = [];
+    let originMarker = null;
+    let originLatLng = null;
+
+    let directionsService, distanceMatrixService, geocoder, placesService;
+    let directionsRenderer = null;
+
+    let lastRanked = []; // store ranked results for sorting
+
+    function setStatus(msg) {
+      document.getElementById("status").textContent = msg || "";
+    }
 
     function inCardiff(lat, lng) {
       return lat >= CARDIFF_BOUNDS.south && lat <= CARDIFF_BOUNDS.north &&
              lng >= CARDIFF_BOUNDS.west  && lng <= CARDIFF_BOUNDS.east;
     }
 
-    // Robust URL building for GitHub Pages
-    const BASE = new URL("./", window.location.href);
-    const DATA_URLS = {
-      lsoa:   new URL("data/processed/demand_lsoa_cardiff_exact.geojson", BASE).href,
-      demand: new URL("data/processed/demand_points_cardiff_exact.geojson", BASE).href,
-      supply: new URL("data/processed/supply_chargers_ocm.geojson", BASE).href,
-      news:   new URL("data/processed/new_sites_p10.geojson", BASE).href
-    };
-
-    let map, info, trafficLayer, lsoaLayer;
-    let supplyMarkers = [], demandMarkers = [], newMarkers = [];
-    let selectedDestination = null;
-
-    let directionsService, directionsRenderer;
-
-    function setStatus(msg) {
-      document.getElementById("status").textContent = msg || "";
-    }
-
     async function loadGeoJSON(url) {
       const res = await fetch(url, { cache: "no-store" });
-      if (!res.ok) throw new Error(`Fetch failed: ${res.status}  ${url}`);
+      if (!res.ok) throw new Error(`Fetch failed: ${res.status} ${url}`);
       return await res.json();
-    }
-
-    function setMarkersVisible(markers, on) {
-      for (const m of markers) m.setMap(on ? map : null);
     }
 
     function circleSymbol(fillColor, scale) {
@@ -115,12 +164,47 @@
         fillOpacity: 0.95,
         strokeColor: "#ffffff",
         strokeOpacity: 1,
-        strokeWeight: 1,
-        scale
+        strokeWeight: 2,     // ✅ thicker border
+        scale                // ✅ bigger
       };
     }
 
-    function addPointMarkers(geojson, kind) {
+    function setMarkersVisible(markers, on) {
+      for (const m of markers) m.setMap(on ? map : null);
+    }
+
+    function clearRoute() {
+      if (directionsRenderer) directionsRenderer.setMap(null);
+      directionsRenderer = null;
+    }
+
+    function setOrigin(latLng, label) {
+      originLatLng = latLng;
+
+      if (originMarker) originMarker.setMap(null);
+      originMarker = new google.maps.Marker({
+        position: latLng,
+        title: label || "Start",
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          fillColor: "#111827",
+          fillOpacity: 1,
+          strokeColor: "#ffffff",
+          strokeWeight: 2,
+          scale: 7
+        }
+      });
+      originMarker.setMap(map);
+
+      map.panTo(latLng);
+      if (map.getZoom() < 13) map.setZoom(13);
+
+      document.getElementById("btnRecommend").disabled = false;
+      setStatus(`Origin set: ${label || "custom location"}`);
+      clearRoute();
+    }
+
+    function addSupplyMarkers(geojson) {
       const feats = geojson.features || [];
       const markers = [];
 
@@ -128,287 +212,300 @@
         if (!f.geometry || f.geometry.type !== "Point") continue;
         const [lng, lat] = f.geometry.coordinates || [];
         if (typeof lat !== "number" || typeof lng !== "number") continue;
-
-        // ✅ driver local-only: skip points outside Cardiff
         if (!inCardiff(lat, lng)) continue;
 
-        let marker = null;
+        const name = (f.properties && (f.properties.name || f.properties.Title || f.properties.operator)) || "Charger";
+        const id = (f.properties && (f.properties.id || f.properties.ID || f.properties.OCM_ID)) || "";
 
-        if (kind === "supply") {
-          marker = new google.maps.Marker({
-            position: { lat, lng },
-            icon: circleSymbol("#2563eb", 6),
-            title: "Existing charger"
-          });
-          marker.addListener("click", () => {
-            const pos = marker.getPosition();
-            // extra safety
-            if (!inCardiff(pos.lat(), pos.lng())) return;
+        const marker = new google.maps.Marker({
+          position: { lat, lng },
+          icon: circleSymbol("#2563eb", 8),   // ✅ much more obvious
+          title: `${name}${id ? " ("+id+")" : ""}`
+        });
 
-            selectedDestination = pos;
-            info.setContent(`<b>Existing charger</b><br/>Destination set (Cardiff-only).`);
-            info.open(map, marker);
-            document.getElementById("btnRoute").disabled = false;
-          });
-        }
+        marker.__meta = { name, id };
 
-        if (kind === "new") {
-          const sid = (f.properties && (f.properties.site_id || f.properties.id || f.properties.chosen_candidate_id)) || "";
-          marker = new google.maps.Marker({
-            position: { lat, lng },
-            icon: {
-              path: google.maps.SymbolPath.BACKWARD_CLOSED_ARROW,
-              fillColor: "#ef4444",
-              fillOpacity: 0.95,
-              strokeColor: "#ffffff",
-              strokeWeight: 1,
-              scale: 7
-            },
-            title: `NEW site (P=10) ${sid}`.trim()
-          });
-          marker.addListener("click", () => {
-            const pos = marker.getPosition();
-            if (!inCardiff(pos.lat(), pos.lng())) return;
+        marker.addListener("click", () => {
+          info.setContent(`<b>${name}</b><br/>${id ? "ID: "+id+"<br/>" : ""}Click “Recommend best chargers (ETA)” to compare.`);
+          info.open(map, marker);
+        });
 
-            selectedDestination = pos;
-            info.setContent(`<b>NEW site (P=10)</b><br/>id: ${sid || "(n/a)"}<br/>Destination set (Cardiff-only).`);
-            info.open(map, marker);
-            document.getElementById("btnRoute").disabled = false;
-          });
-        }
-
-        if (kind === "demand") {
-          const lsoa = (f.properties && (f.properties.LSOA21CD || f.properties.lsoa)) || "demand";
-          marker = new google.maps.Marker({
-            position: { lat, lng },
-            icon: circleSymbol("#6b7280", 4),
-            title: `Demand: ${lsoa}`
-          });
-          marker.addListener("click", () => {
-            info.setContent(`<b>Demand centroid</b><br/>${lsoa}`);
-            info.open(map, marker);
-          });
-        }
-
-        if (marker) {
-          marker.setMap(map);
-          markers.push(marker);
-        }
+        marker.setMap(map);
+        markers.push(marker);
       }
+
       return markers;
     }
 
-    function initLayersUI() {
-      const lyTraffic = document.getElementById("lyTraffic");
-      const lyLSOA    = document.getElementById("lyLSOA");
-      const lySupply  = document.getElementById("lySupply");
-      const lyNew     = document.getElementById("lyNew");
-      const lyDemand  = document.getElementById("lyDemand");
-
-      lyTraffic.addEventListener("change", () => trafficLayer.setMap(lyTraffic.checked ? map : null));
-      lyLSOA.addEventListener("change", () => lsoaLayer.setMap(lyLSOA.checked ? map : null));
-      lySupply.addEventListener("change", () => setMarkersVisible(supplyMarkers, lySupply.checked));
-      lyNew.addEventListener("change", () => setMarkersVisible(newMarkers, lyNew.checked));
-      lyDemand.addEventListener("change", () => setMarkersVisible(demandMarkers, lyDemand.checked));
+    function haversineMeters(a, b) {
+      const R = 6371000;
+      const toRad = x => x * Math.PI / 180;
+      const dLat = toRad(b.lat() - a.lat());
+      const dLng = toRad(b.lng() - a.lng());
+      const s1 = Math.sin(dLat/2), s2 = Math.sin(dLng/2);
+      const c = s1*s1 + Math.cos(toRad(a.lat())) * Math.cos(toRad(b.lat())) * s2*s2;
+      return 2 * R * Math.asin(Math.sqrt(c));
     }
 
-    // Safer bounds from GeoJSON polygons
-    function fitBoundsFromGeoJSONPolygon(geojson) {
-      const bounds = new google.maps.LatLngBounds();
-      let added = 0;
+    function renderList(items) {
+      const box = document.getElementById("results");
+      const badge = document.getElementById("countBadge");
+      badge.textContent = String(items.length);
 
-      function addCoord(lng, lat) {
-        if (typeof lat !== "number" || typeof lng !== "number") return;
-        if (!isFinite(lat) || !isFinite(lng)) return;
-        if (lat < -85 || lat > 85) return;
-        if (lng < -180 || lng > 180) return;
-
-        // local-only: keep bounds within Cardiff
-        if (!inCardiff(lat, lng)) return;
-
-        bounds.extend({ lat, lng });
-        added++;
+      box.innerHTML = "";
+      if (!items.length) {
+        box.innerHTML = `<div class="small">No results yet. Set origin → Recommend.</div>`;
+        return;
       }
 
-      for (const f of (geojson.features || [])) {
-        const g = f.geometry;
-        if (!g) continue;
+      for (const it of items) {
+        const div = document.createElement("div");
+        div.className = "item";
+        div.innerHTML = `
+          <div class="itemTitle">${it.rank}. ${it.name}</div>
+          <div class="itemMeta">
+            <span><b>ETA:</b> ${it.etaText || "(n/a)"}</span>
+            <span><b>Distance:</b> ${it.distText || "(n/a)"}</span>
+          </div>
+        `;
+        div.addEventListener("click", () => {
+          // draw route to selected charger (traffic-aware)
+          routeTo(it.marker.getPosition(), it.name);
+          map.panTo(it.marker.getPosition());
+          if (map.getZoom() < 14) map.setZoom(14);
+          info.setContent(`<b>${it.name}</b><br/>Selected. Route drawn (traffic-aware).`);
+          info.open(map, it.marker);
+        });
+        box.appendChild(div);
+      }
+    }
 
-        if (g.type === "Polygon") {
-          for (const ring of g.coordinates || []) {
-            for (const [lng, lat] of ring || []) addCoord(lng, lat);
-          }
-        } else if (g.type === "MultiPolygon") {
-          for (const poly of g.coordinates || []) {
-            for (const ring of poly || []) {
-              for (const [lng, lat] of ring || []) addCoord(lng, lat);
-            }
-          }
+    function sortAndRender(mode) {
+      const sortETA = document.getElementById("sortETA");
+      const sortDist = document.getElementById("sortDist");
+      sortETA.classList.toggle("active", mode === "eta");
+      sortDist.classList.toggle("active", mode === "dist");
+
+      let items = [...lastRanked];
+      if (mode === "dist") items.sort((a,b) => (a.distVal ?? 1e18) - (b.distVal ?? 1e18));
+      else items.sort((a,b) => (a.etaVal ?? 1e18) - (b.etaVal ?? 1e18));
+
+      // update rank numbers
+      items = items.map((x, i) => ({ ...x, rank: i+1 }));
+      renderList(items);
+    }
+
+    function routeTo(destLatLng, name) {
+      if (!originLatLng) return;
+
+      clearRoute();
+      directionsRenderer = new google.maps.DirectionsRenderer({ map, suppressMarkers: true });
+
+      directionsService.route({
+        origin: originLatLng,
+        destination: destLatLng,
+        travelMode: google.maps.TravelMode.DRIVING,
+        drivingOptions: {
+          departureTime: new Date(),
+          trafficModel: google.maps.TrafficModel.BEST_GUESS
         }
+      }, (result, status) => {
+        if (status !== "OK" || !result) {
+          setStatus("Route failed: " + status);
+          return;
+        }
+        directionsRenderer.setDirections(result);
+        const leg = result.routes[0].legs[0];
+        const durTraffic = leg.duration_in_traffic ? leg.duration_in_traffic.text : "(n/a)";
+        setStatus(`Route to: ${name}\nETA (traffic): ${durTraffic} | Distance: ${leg.distance.text}`);
+      });
+    }
+
+    async function recommendBest() {
+      if (!originLatLng) return;
+
+      setStatus("Selecting nearby chargers…");
+
+      // pick closest candidates by straight-line distance first (fast filter)
+      const scored = supplyMarkers.map(m => ({
+        marker: m,
+        name: m.__meta?.name || m.getTitle() || "Charger",
+        approxM: haversineMeters(originLatLng, m.getPosition())
+      })).sort((a,b) => a.approxM - b.approxM).slice(0, TOP_N_CANDIDATES);
+
+      if (!scored.length) {
+        setStatus("No chargers found in Cardiff bounds.");
+        return;
       }
 
-      if (added > 10) {
-        map.fitBounds(bounds);
-        return true;
-      }
-      return false;
+      setStatus(`Computing ETA (traffic) for top ${scored.length} chargers…`);
+
+      // Use Distance Matrix with traffic
+      const origins = [originLatLng];
+      const destinations = scored.map(x => x.marker.getPosition());
+
+      distanceMatrixService.getDistanceMatrix({
+        origins,
+        destinations,
+        travelMode: google.maps.TravelMode.DRIVING,
+        drivingOptions: {
+          departureTime: new Date(),
+          trafficModel: google.maps.TrafficModel.BEST_GUESS
+        },
+        unitSystem: google.maps.UnitSystem.METRIC
+      }, (resp, status) => {
+        if (status !== "OK" || !resp) {
+          setStatus("DistanceMatrix failed: " + status);
+          return;
+        }
+
+        const row = resp.rows?.[0];
+        const elements = row?.elements || [];
+
+        const ranked = scored.map((x, i) => {
+          const el = elements[i];
+          const ok = el && el.status === "OK";
+          const eta = ok ? (el.duration_in_traffic || el.duration) : null;
+          const dist = ok ? el.distance : null;
+
+          return {
+            marker: x.marker,
+            name: x.name,
+            etaVal: eta ? eta.value : null,
+            etaText: eta ? eta.text : null,
+            distVal: dist ? dist.value : null,
+            distText: dist ? dist.text : null,
+            rank: i+1
+          };
+        });
+
+        lastRanked = ranked;
+
+        // default sort by ETA
+        sortAndRender("eta");
+        setStatus("Done. Click an item to draw route.");
+      });
+    }
+
+    function initUI() {
+      document.getElementById("lyTraffic").addEventListener("change", (e) => {
+        trafficLayer.setMap(e.target.checked ? map : null);
+      });
+      document.getElementById("lySupply").addEventListener("change", (e) => {
+        setMarkersVisible(supplyMarkers, e.target.checked);
+      });
+
+      document.getElementById("btnMyLoc").addEventListener("click", () => {
+        setStatus("Getting your location…");
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const lat = pos.coords.latitude, lng = pos.coords.longitude;
+            if (!inCardiff(lat, lng)) {
+              setStatus("Your location is outside Cardiff bounds (Driver view is locked).");
+              return;
+            }
+            setOrigin(new google.maps.LatLng(lat, lng), "My location");
+          },
+          (err) => {
+            setStatus("Geolocation denied/unavailable. Use search instead.");
+            alert("Cannot access location: " + err.message);
+          },
+          { enableHighAccuracy: true, timeout: 8000 }
+        );
+      });
+
+      document.getElementById("btnRecommend").addEventListener("click", recommendBest);
+
+      document.getElementById("sortETA").addEventListener("click", () => sortAndRender("eta"));
+      document.getElementById("sortDist").addEventListener("click", () => sortAndRender("dist"));
+
+      document.getElementById("btnSearch").addEventListener("click", doSearch);
+      document.getElementById("searchInput").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") doSearch();
+      });
+    }
+
+    function doSearch() {
+      const q = (document.getElementById("searchInput").value || "").trim();
+      if (!q) return;
+
+      setStatus("Searching…");
+
+      // Use Places textSearch (needs "places" library)
+      placesService.textSearch({
+        query: q,
+        location: CARDIFF_CENTER,
+        radius: 15000
+      }, (results, status) => {
+        if (status !== google.maps.places.PlacesServiceStatus.OK || !results || !results.length) {
+          // fallback: geocoder
+          geocoder.geocode({ address: q }, (res2, st2) => {
+            if (st2 !== "OK" || !res2 || !res2.length) {
+              setStatus("Search failed. Try another query.");
+              return;
+            }
+            const loc = res2[0].geometry.location;
+            if (!inCardiff(loc.lat(), loc.lng())) {
+              setStatus("Result is outside Cardiff. Try a Cardiff address/place.");
+              return;
+            }
+            setOrigin(loc, res2[0].formatted_address || q);
+          });
+          return;
+        }
+
+        const best = results[0];
+        const loc = best.geometry.location;
+        if (!inCardiff(loc.lat(), loc.lng())) {
+          setStatus("Result is outside Cardiff. Try a Cardiff address/place.");
+          return;
+        }
+        setOrigin(loc, best.formatted_address || best.name || q);
+      });
     }
 
     async function initMap() {
-      // ✅ Local-only map: restriction + zoom limits
       map = new google.maps.Map(document.getElementById("map"), {
-        center: { lat: 51.4816, lng: -3.1791 },
+        center: CARDIFF_CENTER,
         zoom: 12,
-
         minZoom: 11,
         maxZoom: 17,
-
         mapTypeControl: false,
         streetViewControl: false,
         fullscreenControl: true,
-
-        restriction: {
-          latLngBounds: CARDIFF_BOUNDS,
-          strictBounds: true
-        }
+        restriction: { latLngBounds: CARDIFF_BOUNDS, strictBounds: true }
       });
-
-      if (DEBUG) {
-        new google.maps.Marker({
-          position: { lat: 51.4816, lng: -3.1791 },
-          title: "DEBUG: Cardiff center"
-        }).setMap(map);
-      }
 
       info = new google.maps.InfoWindow();
 
       trafficLayer = new google.maps.TrafficLayer();
       trafficLayer.setMap(map);
 
-      lsoaLayer = new google.maps.Data();
-      lsoaLayer.setStyle({
-        fillColor: "#93c5fd",
-        fillOpacity: 0.18,
-        strokeColor: "#2563eb",
-        strokeOpacity: 0.9,
-        strokeWeight: 1.5
-      });
-      lsoaLayer.setMap(map);
+      directionsService = new google.maps.DirectionsService();
+      distanceMatrixService = new google.maps.DistanceMatrixService();
+      geocoder = new google.maps.Geocoder();
+      placesService = new google.maps.places.PlacesService(map);
 
-      // Click LSOA to show properties (if exist)
-      lsoaLayer.addListener("click", (e) => {
-        const code = e.feature.getProperty("LSOA21CD") || e.feature.getProperty("lsoa21cd") || "";
-        const name = e.feature.getProperty("LSOA21NM") || e.feature.getProperty("lsoa21nm") || "";
-        info.setContent(`<b>LSOA</b><br/>${code || "(no code)"}<br/>${name || ""}`);
-        info.setPosition(e.latLng);
-        info.open(map);
-      });
-
-      directionsService  = new google.maps.DirectionsService();
-      directionsRenderer = new google.maps.DirectionsRenderer({ map, suppressMarkers: true });
-
-      initLayersUI();
-
-      // Extra clamp (optional). strictBounds usually enough, but this makes it rock-solid.
-      let lastValidCenter = map.getCenter();
-      map.addListener("center_changed", () => {
-        const c = map.getCenter();
-        if (inCardiff(c.lat(), c.lng())) lastValidCenter = c;
-        else map.panTo(lastValidCenter);
-      });
+      initUI();
 
       try {
-        setStatus(
-          "Loading GeoJSON...\n" +
-          Object.entries(DATA_URLS).map(([k,v]) => `${k}: ${v}`).join("\n")
-        );
-
-        const [lsoa, demand, supply, news] = await Promise.all([
-          loadGeoJSON(DATA_URLS.lsoa),
-          loadGeoJSON(DATA_URLS.demand),
-          loadGeoJSON(DATA_URLS.supply),
-          loadGeoJSON(DATA_URLS.news),
-        ]);
-
-        // Polygons
-        lsoaLayer.addGeoJson(lsoa);
-
-        // Fit to LSOA within Cardiff
-        const ok = fitBoundsFromGeoJSONPolygon(lsoa);
-        if (!ok) {
-          map.setCenter({ lat: 51.4816, lng: -3.1791 });
-          map.setZoom(12);
-        }
-
-        // After fitBounds, prevent zoom-out too far
-        google.maps.event.addListenerOnce(map, "idle", () => {
-          if (map.getZoom() < 11) map.setZoom(11);
-        });
-
-        // Markers
-        supplyMarkers = addPointMarkers(supply, "supply");
-        newMarkers    = addPointMarkers(news, "new");
-        demandMarkers = addPointMarkers(demand, "demand");
-        setMarkersVisible(demandMarkers, false);
-
-        setStatus(
-          `Loaded (Cardiff-only).\n` +
-          `LSOA features: ${(lsoa.features||[]).length}\n` +
-          `Supply points: ${(supply.features||[]).length}\n` +
-          `New points: ${(news.features||[]).length}\n` +
-          `Demand points: ${(demand.features||[]).length}\n\n` +
-          `Tip: if you can't route, allow Location permission in browser.\n`
-        );
-      } catch (err) {
-        console.error(err);
-        setStatus("FAILED.\n" + String(err));
-        alert(String(err));
+        setStatus("Loading chargers…");
+        const supply = await loadGeoJSON(DATA_URLS.supply);
+        supplyMarkers = addSupplyMarkers(supply);
+        setStatus(`Loaded chargers: ${supplyMarkers.length}\nSet origin (Search/My location) → Recommend.`);
+      } catch (e) {
+        console.error(e);
+        setStatus("Failed to load chargers. Check console & file paths.");
+        alert(String(e));
       }
-
-      // Route button
-      document.getElementById("btnRoute").addEventListener("click", () => {
-        if (!selectedDestination) return;
-
-        setStatus("Getting your location…");
-        navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            const origin = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-            setStatus("Routing with traffic…");
-
-            directionsService.route({
-              origin,
-              destination: selectedDestination,
-              travelMode: google.maps.TravelMode.DRIVING,
-              drivingOptions: {
-                departureTime: new Date(),
-                trafficModel: google.maps.TrafficModel.BEST_GUESS
-              }
-            }, (result, status) => {
-              if (status !== "OK" || !result) {
-                setStatus("Route failed: " + status);
-                return;
-              }
-              directionsRenderer.setDirections(result);
-
-              const leg = result.routes[0].legs[0];
-              const durTraffic = leg.duration_in_traffic ? leg.duration_in_traffic.text : "(n/a)";
-              setStatus(`ETA (traffic): ${durTraffic} | Distance: ${leg.distance.text}`);
-            });
-          },
-          (err) => {
-            setStatus("Geolocation denied/unavailable.\nPlease allow Location permission (HTTPS required).");
-            alert("Cannot access location: " + err.message);
-          },
-          { enableHighAccuracy: true, timeout: 8000 }
-        );
-      });
     }
 
     window.initMap = initMap;
 
     (function loadGoogleMaps() {
       const s = document.createElement("script");
-      s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GMAPS_KEY)}&callback=initMap&v=weekly`;
+      // IMPORTANT: add libraries=places for search
+      s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GMAPS_KEY)}&callback=initMap&v=weekly&libraries=places`;
       s.async = true;
       s.defer = true;
       document.head.appendChild(s);
