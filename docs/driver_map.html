@@ -14,10 +14,10 @@
       position:absolute; top:12px; left:12px; z-index:5;
       background:rgba(255,255,255,0.96);
       border:1px solid #ddd; border-radius:12px;
-      padding:12px 12px; width:360px;
+      padding:12px 12px; width:380px;
       box-shadow:0 6px 22px rgba(0,0,0,0.14);
     }
-    .title { font-size: 18px; font-weight: 750; margin: 2px 0 10px; }
+    .title { font-size: 18px; font-weight: 800; margin: 2px 0 10px; }
     .small{ color:#374151; font-size:12px; }
     .hint{ margin-top:6px; font-size:12px; color:#6b7280; line-height: 1.35; }
 
@@ -28,7 +28,8 @@
     }
     .btn{
       background:#111827; color:#fff; border:none; border-radius:10px;
-      padding:10px 12px; cursor:pointer; font-size:13px; font-weight:600;
+      padding:10px 12px; cursor:pointer; font-size:13px; font-weight:700;
+      white-space: nowrap;
     }
     .btn.secondary{ background:#6b7280; }
     .btn:disabled{ opacity:0.5; cursor:not-allowed; }
@@ -39,10 +40,10 @@
 
     .status { margin-top:8px; font-size:12px; color:#111827; white-space:pre-wrap; }
 
-    .chips { display:flex; gap:8px; margin-top:8px; }
+    .chips { display:flex; gap:8px; margin-top:8px; flex-wrap: wrap; }
     .chip{
       border:1px solid #e5e7eb; background:#fff; border-radius:999px; padding:6px 10px;
-      cursor:pointer; font-size:12px; font-weight:600; color:#111827;
+      cursor:pointer; font-size:12px; font-weight:800; color:#111827;
     }
     .chip.active{ background:#111827; color:#fff; border-color:#111827; }
 
@@ -54,14 +55,23 @@
     .item:hover { background:#f8fafc; }
     .item:last-child { border-bottom:none; }
     .item .top { display:flex; justify-content:space-between; align-items:center; gap:8px; }
-    .item .name { font-weight:700; font-size:13px; }
-    .item .meta { font-size:12px; color:#374151; margin-top:4px; line-height:1.25; }
+    .item .name { font-weight:800; font-size:13px; }
+    .item .meta { font-size:12px; color:#374151; margin-top:4px; line-height:1.35; }
     .badge {
       font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid #e5e7eb;
       color:#111827; background:#fff;
     }
     .badge.good { border-color:#bbf7d0; background:#f0fdf4; }
     .badge.warn { border-color:#fed7aa; background:#fff7ed; }
+
+    .actions { margin-top:6px; display:flex; gap:8px; flex-wrap: wrap; }
+    .linkbtn{
+      display:inline-block; font-size:12px; font-weight:800;
+      padding:6px 10px; border-radius:10px;
+      border:1px solid #e5e7eb; text-decoration:none;
+      color:#111827; background:#fff;
+    }
+    .linkbtn:hover{ background:#f8fafc; }
 
     .legend { margin-top: 10px; font-size: 12px; }
     .swatch{ display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; border:1px solid rgba(0,0,0,0.2); }
@@ -72,7 +82,7 @@
   <div id="map"></div>
 
   <div class="panel">
-    <div class="title">Driver view (Cardiff only)</div>
+    <div class="title">Driver view (Cardiff)</div>
 
     <!-- Search -->
     <div class="row">
@@ -82,7 +92,12 @@
 
     <div class="row">
       <button id="btnMyLoc" class="btn secondary">Use my location</button>
+      <button id="btnClickMode" class="btn secondary">Click map to set origin: OFF</button>
+    </div>
+
+    <div class="row">
       <button id="btnRecommend" class="btn" disabled>Recommend best chargers (ETA)</button>
+      <button id="btnClearRoute" class="btn secondary">Clear route</button>
     </div>
 
     <div class="section">
@@ -90,22 +105,25 @@
       <div class="check"><input id="lySupply" type="checkbox" checked><label for="lySupply">Existing chargers</label></div>
       <div class="check"><input id="lyPlanned" type="checkbox"><label for="lyPlanned">Planned new sites (future)</label></div>
       <div class="check"><input id="lyLSOA" type="checkbox"><label for="lyLSOA">LSOA boundary (optional)</label></div>
+      <div class="check"><input id="toggleUnlock" type="checkbox"><label for="toggleUnlock">Unlock map (beyond Cardiff)</label></div>
 
       <div class="hint">
-        Tip: traffic lines are clearer at zoom ≥ 12. Driver map is locked to Cardiff bounds.
+        Tip: traffic lines are clearer at zoom ≥ 12. Default view is Cardiff-only.
+        If search fails, check: API enabled + billing + key referrers.
       </div>
     </div>
 
     <div class="section">
-      <div class="small"><b>Best options</b> <span id="count" class="badge">0</span></div>
+      <div class="small"><b>Top 5 options</b> <span id="count" class="badge">0</span></div>
       <div class="chips">
         <div id="sortEta" class="chip active">Sort: ETA</div>
         <div id="sortDist" class="chip">Sort: Distance</div>
+        <div id="sortBal" class="chip">Sort: Balanced</div>
       </div>
       <div id="list" class="list">
         <div class="item" style="cursor:default;">
           <div class="name">No results yet.</div>
-          <div class="meta">Set origin (search / my location) → Recommend.</div>
+          <div class="meta">Set origin (search / my location / click map) → Recommend.</div>
         </div>
       </div>
     </div>
@@ -123,31 +141,32 @@
   // ====== PUT YOUR KEY HERE ======
   const GMAPS_KEY = "AIzaSyAUproFl8jRStUlFwOKbQ8yh2CjNJ_H2c4";
 
-  // GitHub Pages relative base
+  // Base (GitHub Pages)
   const BASE = new URL("./", window.location.href);
 
-  // Data files (must be reachable under docs/)
+  // Data files
   const DATA_URLS = {
     lsoa:   new URL("data/processed/demand_lsoa_cardiff_exact.geojson", BASE).href,
     supply: new URL("data/processed/supply_chargers_ocm.geojson", BASE).href,
     planned:new URL("data/processed/new_sites_p10.geojson", BASE).href
   };
 
-  // Cardiff bounds (slightly padded)
+  // Cardiff bounds (padded)
   const CARDIFF_BOUNDS = { west: -3.50, east: -2.85, south: 51.33, north: 51.62 };
   const CARDIFF_CENTER = { lat: 51.4816, lng: -3.1791 };
 
-  // UI config
-  const MAX_STRAIGHTLINE_CANDIDATES = 40; // pre-filter to avoid too many API calls
-  const TOP_N = 10;
+  // === R1: Top 5 requirement ===
+  const TOP_N = 5;
+
+  // Performance guard: prefilter candidates (straight-line)
+  const MAX_STRAIGHTLINE_CANDIDATES = 40;
 
   // Map globals
   let map, info, trafficLayer;
   let lsoaLayer;
   let supplyMarkers = [];
   let plannedMarkers = [];
-  let supplyFeatures = []; // keep features for recommendation
-  let plannedFeatures = [];
+  let supplyFeatures = [];
 
   // Origin & route
   let originMarker = null;
@@ -156,17 +175,16 @@
   let directionsService, directionsRenderer;
   let distanceMatrixService, geocoder;
 
-  // Sorting
-  let sortMode = "eta"; // "eta" or "dist"
-  let lastResults = []; // cached recommend results
-
-  // Marker highlight
+  // UI state
+  let sortMode = "eta"; // "eta" | "dist" | "bal"
+  let lastResults = [];
   let highlightedId = null;
+  let clickMode = false;      // R3 fallback
+  let unlocked = false;       // R7 unlock map
 
   function setStatus(msg) {
     document.getElementById("status").textContent = msg || "";
   }
-
   function setCount(n) {
     document.getElementById("count").textContent = String(n ?? 0);
   }
@@ -177,12 +195,12 @@
     return await res.json();
   }
 
-  function withinCardiff(latLng) {
+  function withinBounds(latLng, b) {
     return (
-      latLng.lat() >= CARDIFF_BOUNDS.south &&
-      latLng.lat() <= CARDIFF_BOUNDS.north &&
-      latLng.lng() >= CARDIFF_BOUNDS.west &&
-      latLng.lng() <= CARDIFF_BOUNDS.east
+      latLng.lat() >= b.south &&
+      latLng.lat() <= b.north &&
+      latLng.lng() >= b.west &&
+      latLng.lng() <= b.east
     );
   }
 
@@ -191,7 +209,6 @@
   }
 
   function circleIcon(fillColor, scale, labelText=null) {
-    // Use normal Marker with circle symbol + optional label
     return {
       icon: {
         path: google.maps.SymbolPath.CIRCLE,
@@ -205,7 +222,7 @@
       label: labelText ? {
         text: labelText,
         color: "#ffffff",
-        fontWeight: "800",
+        fontWeight: "900",
         fontSize: "10px"
       } : undefined
     };
@@ -222,8 +239,10 @@
     };
   }
 
+  // R3: origin setting: search / my location / click on map
   function setOrigin(latLng, label="Origin") {
     originLatLng = latLng;
+
     if (!originMarker) {
       originMarker = new google.maps.Marker({
         position: latLng,
@@ -245,9 +264,17 @@
 
     map.panTo(latLng);
     map.setZoom(Math.max(map.getZoom(), 12));
-
     document.getElementById("btnRecommend").disabled = false;
     setStatus("Origin set. Click “Recommend best chargers (ETA)”.");
+  }
+
+  function escapeHtml(s) {
+    return String(s || "")
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;")
+      .replaceAll("'","&#039;");
   }
 
   function getProp(p, keys) {
@@ -256,6 +283,20 @@
       if (p[k] !== undefined && p[k] !== null && String(p[k]).trim() !== "") return String(p[k]);
     }
     return "";
+  }
+
+  // R8: charging speed (if available) – best-effort parse
+  function parseChargingKW(props) {
+    const direct = Number(getProp(props, ["power_kw","PowerKW","power","kw","kW"]));
+    if (Number.isFinite(direct) && direct > 0) return direct;
+
+    // common nested patterns (optional)
+    const conn = props?.Connections || props?.connections;
+    if (Array.isArray(conn) && conn.length) {
+      const k = Number(conn[0]?.PowerKW || conn[0]?.power_kw || conn[0]?.power);
+      if (Number.isFinite(k) && k > 0) return k;
+    }
+    return null; // unknown
   }
 
   function addSupplyMarkers(geojson) {
@@ -272,28 +313,28 @@
       const name = getProp(f.properties, ["name","Name","title","Title","operator","Operator","AddressInfo.Title"]) || "Existing charger";
       const id = getProp(f.properties, ["id","ID","ocm_id","OCM_ID"]) || `supply_${i}`;
 
+      // R2: make charger markers more obvious (bigger + ⚡ + outline)
       const marker = new google.maps.Marker({
         position: { lat, lng },
         map,
         title: name,
-        ...circleIcon("#2563eb", 8, "⚡")
+        ...circleIcon("#2563eb", 9, "⚡")
       });
 
       marker.__id = id;
-      marker.__kind = "supply";
       marker.__feature = f;
 
       marker.addListener("click", () => {
         highlightMarker(id);
         const dest = marker.getPosition();
-        const gmapsLink = `https://www.google.com/maps/dir/?api=1&destination=${dest.lat()},${dest.lng()}`;
+        const gmapsLink = `https://www.google.com/maps/dir/?api=1&destination=${dest.lat()},${dest.lng()}&travelmode=driving`;
         info.setContent(
           `<b>${escapeHtml(name)}</b><br/>Existing charger<br/>` +
           `<a href="${gmapsLink}" target="_blank" rel="noopener">Open in Google Maps</a>`
         );
         info.open(map, marker);
 
-        // allow quick route preview if origin exists
+        // R5: route preview when origin exists
         if (originLatLng) previewRoute(originLatLng, dest);
       });
 
@@ -304,8 +345,6 @@
 
   function addPlannedMarkers(geojson) {
     const feats = geojson.features || [];
-    plannedFeatures = feats;
-
     const markers = [];
     for (let i=0; i<feats.length; i++) {
       const f = feats[i];
@@ -316,16 +355,12 @@
       const sid = getProp(f.properties, ["site_id","id","chosen_candidate_id"]) || `planned_${i}`;
       const marker = new google.maps.Marker({
         position: { lat, lng },
-        map: null, // default OFF
+        map: null, // R10: default off in driver view
         title: `Planned site: ${sid}`,
         icon: plannedIcon()
       });
-      marker.__id = sid;
-      marker.__kind = "planned";
-      marker.__feature = f;
 
       marker.addListener("click", () => {
-        const dest = marker.getPosition();
         info.setContent(`<b>Planned new site (future)</b><br/>id: ${escapeHtml(sid)}`);
         info.open(map, marker);
       });
@@ -336,16 +371,14 @@
   }
 
   function highlightMarker(id) {
-    // reset previous
     if (highlightedId && highlightedId !== id) {
       const prev = supplyMarkers.find(m => m.__id === highlightedId);
-      if (prev) prev.setOptions(circleIcon("#2563eb", 8, "⚡"));
+      if (prev) prev.setOptions(circleIcon("#2563eb", 9, "⚡"));
     }
     highlightedId = id;
     const m = supplyMarkers.find(x => x.__id === id);
     if (m) {
-      // make it even more obvious
-      m.setOptions(circleIcon("#1d4ed8", 11, "⚡"));
+      m.setOptions(circleIcon("#1d4ed8", 12, "⚡"));
       map.panTo(m.getPosition());
     }
   }
@@ -355,47 +388,57 @@
     const lySupply  = document.getElementById("lySupply");
     const lyPlanned = document.getElementById("lyPlanned");
     const lyLSOA    = document.getElementById("lyLSOA");
+    const toggleUnlock = document.getElementById("toggleUnlock");
 
     lyTraffic.addEventListener("change", () => trafficLayer.setMap(lyTraffic.checked ? map : null));
     lySupply.addEventListener("change", () => setMarkersVisible(supplyMarkers, lySupply.checked));
     lyPlanned.addEventListener("change", () => setMarkersVisible(plannedMarkers, lyPlanned.checked));
     lyLSOA.addEventListener("change", () => lsoaLayer.setMap(lyLSOA.checked ? map : null));
+
+    // R7: Cardiff-focused with optional unlock
+    toggleUnlock.addEventListener("change", () => {
+      unlocked = toggleUnlock.checked;
+      map.setOptions({
+        restriction: unlocked ? null : { latLngBounds: CARDIFF_BOUNDS, strictBounds: true }
+      });
+      setStatus(unlocked ? "Map unlocked. You can explore beyond Cardiff." : "Map locked to Cardiff.");
+    });
   }
 
   function initSortUI() {
     const sortEta = document.getElementById("sortEta");
     const sortDist= document.getElementById("sortDist");
+    const sortBal = document.getElementById("sortBal");
 
     function setActive(mode) {
       sortMode = mode;
       sortEta.classList.toggle("active", mode==="eta");
       sortDist.classList.toggle("active", mode==="dist");
-
+      sortBal.classList.toggle("active", mode==="bal");
       if (lastResults.length) renderList(sortResults(lastResults));
     }
 
     sortEta.addEventListener("click", () => setActive("eta"));
     sortDist.addEventListener("click", () => setActive("dist"));
+    sortBal.addEventListener("click", () => setActive("bal"));
   }
 
   function sortResults(arr) {
     const copy = [...arr];
     if (sortMode === "dist") copy.sort((a,b) => a.distanceMeters - b.distanceMeters);
+    else if (sortMode === "bal") copy.sort((a,b) => a.balancedScore - b.balancedScore);
     else copy.sort((a,b) => a.durationTrafficSec - b.durationTrafficSec);
     return copy;
   }
 
-  function fmtKm(m) {
-    return (m/1000).toFixed(1) + " km";
-  }
-  function fmtMin(s) {
-    return Math.max(1, Math.round(s/60)) + " min";
-  }
+  function fmtKm(m) { return (m/1000).toFixed(1) + " km"; }
+  function fmtMin(s) { return Math.max(1, Math.round(s/60)) + " min"; }
 
   function renderList(results) {
     const list = document.getElementById("list");
     list.innerHTML = "";
 
+    // R1: Top 5 list
     const top = results.slice(0, TOP_N);
     setCount(top.length);
 
@@ -403,7 +446,7 @@
       list.innerHTML = `
         <div class="item" style="cursor:default;">
           <div class="name">No results.</div>
-          <div class="meta">Try a different origin or ensure chargers layer is loaded.</div>
+          <div class="meta">Try a different origin or ensure APIs are enabled.</div>
         </div>`;
       return;
     }
@@ -411,8 +454,12 @@
     for (let i=0; i<top.length; i++) {
       const r = top[i];
       const delay = Math.max(0, r.durationTrafficSec - r.durationSec);
+
+      // R6: traffic delay vs normal
       const badgeClass = delay <= 60 ? "good" : "warn";
       const badgeText  = delay <= 60 ? "low delay" : `+${fmtMin(delay)}`;
+
+      const navLink = `https://www.google.com/maps/dir/?api=1&origin=${originLatLng.lat()},${originLatLng.lng()}&destination=${r.destLatLng.lat()},${r.destLatLng.lng()}&travelmode=driving`;
 
       const div = document.createElement("div");
       div.className = "item";
@@ -424,11 +471,27 @@
         <div class="meta">
           ETA (traffic): <b>${fmtMin(r.durationTrafficSec)}</b>
           &nbsp;•&nbsp; Distance: <b>${fmtKm(r.distanceMeters)}</b><br/>
-          Normal time: ${fmtMin(r.durationSec)}
+          Normal: ${fmtMin(r.durationSec)} &nbsp;•&nbsp; Delay: ${fmtMin(delay)}
+          ${Number.isFinite(r.kw) ? `<br/>Charging speed: ${r.kw.toFixed(0)} kW` : ``}
+          ${r.availability ? `<br/>Availability: ${escapeHtml(r.availability)}` : ``}
+        </div>
+        <div class="actions">
+          <a class="linkbtn" href="${navLink}" target="_blank" rel="noopener">Start navigation</a>
+          <span class="linkbtn" data-act="preview">Preview route</span>
         </div>
       `;
 
-      div.addEventListener("click", () => {
+      // click whole item: highlight + preview
+      div.addEventListener("click", (e) => {
+        // avoid double when clicking Start navigation
+        if (e.target && e.target.tagName === "A") return;
+        highlightMarker(r.id);
+        previewRoute(originLatLng, r.destLatLng);
+      });
+
+      // explicit preview button
+      div.querySelector('[data-act="preview"]').addEventListener("click", (e) => {
+        e.stopPropagation();
         highlightMarker(r.id);
         previewRoute(originLatLng, r.destLatLng);
       });
@@ -439,7 +502,6 @@
 
   function previewRoute(origin, dest) {
     if (!origin || !dest) return;
-
     directionsService.route({
       origin,
       destination: dest,
@@ -456,7 +518,12 @@
       directionsRenderer.setDirections(result);
       const leg = result.routes[0].legs[0];
       const durTraffic = leg.duration_in_traffic ? leg.duration_in_traffic.text : "(n/a)";
-      setStatus(`ETA (traffic): ${durTraffic} | Distance: ${leg.distance.text}\nTip: Driver view is locked to Cardiff.`);
+      const durNormal  = leg.duration ? leg.duration.text : "(n/a)";
+      const delay = (leg.duration_in_traffic && leg.duration) ? (leg.duration_in_traffic.value - leg.duration.value) : 0;
+      setStatus(
+        `ETA (traffic): ${durTraffic} | Normal: ${durNormal} | Delay: ${delay>0 ? fmtMin(delay) : "0 min"}\n` +
+        `Distance: ${leg.distance.text}`
+      );
     });
   }
 
@@ -491,14 +558,20 @@
     });
   }
 
+  // R8: Balanced scoring (ETA + distance + speed if available)
+  function normalize(v, vmin, vmax) {
+    if (!Number.isFinite(v) || vmax === vmin) return 0.5;
+    return (v - vmin) / (vmax - vmin);
+  }
+
   async function recommendBestChargers() {
     if (!originLatLng) {
-      setStatus("Please set origin first (search or my location).");
+      setStatus("Please set origin first (search / my location / click on map).");
       return;
     }
     setStatus("Computing best chargers with live traffic…");
 
-    // pre-filter nearest by straight-line distance
+    // prefilter nearest by straight-line distance
     const origin = { lat: originLatLng.lat(), lng: originLatLng.lng() };
     const candidates = [];
 
@@ -507,20 +580,25 @@
       const pos = m.getPosition();
       if (!pos) continue;
 
+      const f = m.__feature;
+      const props = f?.properties || {};
+      const kw = parseChargingKW(props);
+
       const d = haversineMeters(origin, { lat: pos.lat(), lng: pos.lng() });
       candidates.push({
         id: m.__id,
         name: m.getTitle() || "Existing charger",
         destLatLng: pos,
-        marker: m,
-        straightDist: d
+        straightDist: d,
+        kw: kw,
+        // R9 placeholder (if you later add it)
+        availability: props.availability || props.status || null
       });
     }
 
     candidates.sort((a,b) => a.straightDist - b.straightDist);
     const shortlist = candidates.slice(0, MAX_STRAIGHTLINE_CANDIDATES);
 
-    // Distance Matrix has size limits (25 destinations per request)
     const destChunks = chunk(shortlist.map(x => x.destLatLng), 25);
 
     const results = [];
@@ -533,12 +611,10 @@
         const el = row[j];
         const item = shortlist[processed + j];
         if (!item) continue;
-
         if (el.status !== "OK") continue;
 
         const distM = el.distance?.value ?? null;
         const durS  = el.duration?.value ?? null;
-        // In JS Distance Matrix, traffic time can be provided as duration_in_traffic in some cases
         const durTS = el.duration_in_traffic?.value ?? durS;
 
         if (distM == null || durS == null || durTS == null) continue;
@@ -549,34 +625,58 @@
           destLatLng: item.destLatLng,
           distanceMeters: distM,
           durationSec: durS,
-          durationTrafficSec: durTS
+          durationTrafficSec: durTS,
+          kw: item.kw,
+          availability: item.availability
         });
       }
       processed += row.length;
       setStatus(`Computing… ${Math.min(processed, shortlist.length)}/${shortlist.length} checked`);
     }
 
+    // Balanced scoring fields
+    const etaMin = Math.min(...results.map(r => r.durationTrafficSec));
+    const etaMax = Math.max(...results.map(r => r.durationTrafficSec));
+    const distMin = Math.min(...results.map(r => r.distanceMeters));
+    const distMax = Math.max(...results.map(r => r.distanceMeters));
+
+    // speed: higher better (unknown treated as median)
+    const knownKW = results.map(r => r.kw).filter(x => Number.isFinite(x));
+    const kwMedian = knownKW.length ? knownKW.sort((a,b)=>a-b)[Math.floor(knownKW.length/2)] : 50;
+
+    const kwVals = results.map(r => Number.isFinite(r.kw) ? r.kw : kwMedian);
+    const kwMin = Math.min(...kwVals);
+    const kwMax = Math.max(...kwVals);
+
+    for (let i=0; i<results.length; i++) {
+      const r = results[i];
+      const nEta  = normalize(r.durationTrafficSec, etaMin, etaMax);
+      const nDist = normalize(r.distanceMeters, distMin, distMax);
+      const kwUse = Number.isFinite(r.kw) ? r.kw : kwMedian;
+      const nSpeed = 1 - normalize(kwUse, kwMin, kwMax); // invert so lower is better in score
+
+      // weights: ETA most important, then distance, then speed
+      r.balancedScore = 0.60*nEta + 0.25*nDist + 0.15*nSpeed;
+    }
+
     lastResults = sortResults(results);
     renderList(lastResults);
 
-    if (lastResults.length) {
-      setStatus("Done. Click a list item to highlight and preview route.");
-    } else {
-      setStatus("No results returned. Check API enablement/quota.");
-    }
+    // R1 acceptance: typical ~ 3–5s when candidate count is limited
+    setStatus("Done. Click an option to preview route, or Start navigation.");
   }
 
   function initSearch() {
     const input = document.getElementById("q");
     const btnSearch = document.getElementById("btnSearch");
 
-    // Prefer Places Autocomplete if available
-    if (google.maps.places && google.maps.places.Autocomplete) {
-      const bounds = new google.maps.LatLngBounds(
-        new google.maps.LatLng(CARDIFF_BOUNDS.south, CARDIFF_BOUNDS.west),
-        new google.maps.LatLng(CARDIFF_BOUNDS.north, CARDIFF_BOUNDS.east)
-      );
+    const bounds = new google.maps.LatLngBounds(
+      new google.maps.LatLng(CARDIFF_BOUNDS.south, CARDIFF_BOUNDS.west),
+      new google.maps.LatLng(CARDIFF_BOUNDS.north, CARDIFF_BOUNDS.east)
+    );
 
+    // Prefer Places Autocomplete (R3)
+    if (google.maps.places && google.maps.places.Autocomplete) {
       const ac = new google.maps.places.Autocomplete(input, {
         bounds,
         strictBounds: true,
@@ -591,34 +691,31 @@
           return;
         }
         const loc = place.geometry.location;
-        if (!withinCardiff(loc)) {
-          setStatus("Result is outside Cardiff bounds. Try a Cardiff address/place.");
+
+        // if locked mode and result out of bounds, block
+        if (!unlocked && !withinBounds(loc, CARDIFF_BOUNDS)) {
+          setStatus("Result is outside Cardiff bounds. Enable “Unlock map” or try a Cardiff address.");
           return;
         }
         setOrigin(loc, place.name || place.formatted_address || "Origin");
       });
 
+      // fallback button still geocode
       btnSearch.addEventListener("click", () => {
-        // If user types and clicks search, trigger a geocode fallback
         if (input.value.trim().length < 2) return;
-        geocodeQuery(input.value.trim());
+        geocodeQuery(input.value.trim(), bounds);
       });
 
     } else {
-      // Fallback: plain geocoding
+      // Geocoding-only fallback
       btnSearch.addEventListener("click", () => {
         if (input.value.trim().length < 2) return;
-        geocodeQuery(input.value.trim());
+        geocodeQuery(input.value.trim(), bounds);
       });
     }
   }
 
-  function geocodeQuery(q) {
-    const bounds = new google.maps.LatLngBounds(
-      new google.maps.LatLng(CARDIFF_BOUNDS.south, CARDIFF_BOUNDS.west),
-      new google.maps.LatLng(CARDIFF_BOUNDS.north, CARDIFF_BOUNDS.east)
-    );
-
+  function geocodeQuery(q, bounds) {
     geocoder.geocode({
       address: q,
       bounds,
@@ -629,21 +726,12 @@
         return;
       }
       const loc = results[0].geometry.location;
-      if (!withinCardiff(loc)) {
-        setStatus("Result is outside Cardiff bounds. Try a Cardiff address/place.");
+      if (!unlocked && !withinBounds(loc, CARDIFF_BOUNDS)) {
+        setStatus("Result is outside Cardiff bounds. Enable “Unlock map” or search within Cardiff.");
         return;
       }
       setOrigin(loc, results[0].formatted_address || "Origin");
     });
-  }
-
-  function escapeHtml(s) {
-    return String(s || "")
-      .replaceAll("&","&amp;")
-      .replaceAll("<","&lt;")
-      .replaceAll(">","&gt;")
-      .replaceAll('"',"&quot;")
-      .replaceAll("'","&#039;");
   }
 
   async function initMap() {
@@ -653,18 +741,17 @@
       mapTypeControl: false,
       streetViewControl: false,
       fullscreenControl: true,
-      restriction: {
-        latLngBounds: CARDIFF_BOUNDS,
-        strictBounds: true
-      }
+      // R7: lock by default
+      restriction: { latLngBounds: CARDIFF_BOUNDS, strictBounds: true }
     });
 
     info = new google.maps.InfoWindow();
 
+    // R1: live traffic overlay
     trafficLayer = new google.maps.TrafficLayer();
     trafficLayer.setMap(map);
 
-    // Optional LSOA boundary layer (OFF by default)
+    // Optional LSOA boundary (OFF by default)
     lsoaLayer = new google.maps.Data();
     lsoaLayer.setStyle({
       fillColor: "#93c5fd",
@@ -675,17 +762,8 @@
     });
     lsoaLayer.setMap(null);
 
-    lsoaLayer.addListener("click", (e) => {
-      const cd = e.feature.getProperty("LSOA21CD") || e.feature.getProperty("lsoa21cd") || "";
-      const nm = e.feature.getProperty("LSOA21NM") || e.feature.getProperty("lsoa21nm") || "";
-      info.setContent(`<b>LSOA</b><br/>${escapeHtml(cd)}<br/>${escapeHtml(nm)}`);
-      info.setPosition(e.latLng);
-      info.open(map);
-    });
-
     directionsService  = new google.maps.DirectionsService();
     directionsRenderer = new google.maps.DirectionsRenderer({ map, suppressMarkers: true });
-
     distanceMatrixService = new google.maps.DistanceMatrixService();
     geocoder = new google.maps.Geocoder();
 
@@ -693,29 +771,51 @@
     initSortUI();
     initSearch();
 
+    // R3: click-on-map origin fallback (toggle)
+    map.addListener("click", (e) => {
+      if (!clickMode) return;
+      if (!unlocked && !withinBounds(e.latLng, CARDIFF_BOUNDS)) {
+        setStatus("Click is outside Cardiff. Enable Unlock map or click within Cardiff.");
+        return;
+      }
+      setOrigin(e.latLng, "Origin (map click)");
+    });
+
     // Buttons
     document.getElementById("btnMyLoc").addEventListener("click", () => {
       setStatus("Getting your location…");
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           const loc = new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude);
-          // allow outside Cardiff if user is outside, but if so: clamp to Cardiff? better prompt
-          if (!withinCardiff(loc)) {
-            setStatus("Your location is outside Cardiff bounds. For demo, please search an address within Cardiff.");
+          if (!unlocked && !withinBounds(loc, CARDIFF_BOUNDS)) {
+            setStatus("Your location is outside Cardiff. Enable Unlock map or search within Cardiff.");
             return;
           }
           setOrigin(loc, "My location");
         },
-        (err) => setStatus("Geolocation denied/unavailable."),
+        () => setStatus("Geolocation denied/unavailable. Use search or click-on-map origin."),
         { enableHighAccuracy: true, timeout: 8000 }
       );
     });
 
+    document.getElementById("btnClickMode").addEventListener("click", () => {
+      clickMode = !clickMode;
+      document.getElementById("btnClickMode").textContent = clickMode
+        ? "Click map to set origin: ON"
+        : "Click map to set origin: OFF";
+      setStatus(clickMode ? "Click anywhere on the map to set origin." : "Click-on-map origin disabled.");
+    });
+
     document.getElementById("btnRecommend").addEventListener("click", recommendBestChargers);
+
+    document.getElementById("btnClearRoute").addEventListener("click", () => {
+      directionsRenderer.set('directions', null);
+      setStatus("Route cleared.");
+    });
 
     // Load data
     try {
-      setStatus("Loading charger data…");
+      setStatus("Loading GeoJSON layers…");
 
       const [lsoa, supply, planned] = await Promise.all([
         loadGeoJSON(DATA_URLS.lsoa),
@@ -723,14 +823,17 @@
         loadGeoJSON(DATA_URLS.planned)
       ]);
 
-      // LSOA
       lsoaLayer.addGeoJson(lsoa);
 
-      // Markers
       supplyMarkers  = addSupplyMarkers(supply);
       plannedMarkers = addPlannedMarkers(planned);
 
-      setStatus(`Loaded.\nExisting chargers: ${supplyMarkers.length}\nPlanned sites: ${plannedMarkers.length}\n\nSet origin → Recommend.`);
+      setStatus(
+        `Loaded.\n` +
+        `Chargers: ${supplyMarkers.length}\n` +
+        `Planned sites: ${plannedMarkers.length}\n\n` +
+        `Set origin (search / my location / click map) → Recommend.`
+      );
     } catch (err) {
       console.error(err);
       setStatus("FAILED to load data. Check console & file paths.\n" + String(err));
@@ -740,7 +843,7 @@
 
   window.initMap = initMap;
 
-  // Load Google Maps JS (include Places for search autocomplete)
+  // Load Google Maps JS (Places needed for search)
   (function loadGoogleMaps() {
     const s = document.createElement("script");
     s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GMAPS_KEY)}&callback=initMap&v=weekly&libraries=places`;
