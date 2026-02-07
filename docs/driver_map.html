@@ -3,152 +3,125 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Cardiff EV Charging – Driver View (Traffic-aware)</title>
+  <title>Cardiff EV Charging – Driver View (Cardiff only)</title>
   <style>
     html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
     #map { height: 100%; width: 100%; }
+    /* IMPORTANT: prevent global CSS from breaking Google tiles */
     #map img { max-width: none !important; }
 
     .panel{
       position:absolute; top:12px; left:12px; z-index:5;
       background:rgba(255,255,255,0.96);
-      border:1px solid #ddd; border-radius:12px;
-      padding:12px; width:420px;
-      box-shadow:0 6px 22px rgba(0,0,0,0.14);
+      border:1px solid #ddd; border-radius:14px;
+      padding:12px 12px; width:420px;
+      box-shadow:0 4px 18px rgba(0,0,0,0.12);
     }
-    .title{ font-size:20px; font-weight:700; margin:4px 0 10px; }
-    .row{ display:flex; align-items:center; gap:10px; margin:8px 0; }
+    .title{ font-weight:800; font-size:20px; margin:0 0 10px; }
+    .row{ display:flex; align-items:center; gap:10px; margin:8px 0; flex-wrap:wrap; }
     .row input[type="checkbox"]{ transform: translateY(1px); }
-    .small{ color:#374151; font-size:12px; line-height:1.35; }
-    .hint{ margin-top:6px; font-size:12px; color:#6b7280; }
+    .small{ color:#374151; font-size:12px; }
+    .muted{ color:#6b7280; font-size:12px; }
     .status{ margin-top:8px; font-size:12px; color:#111827; white-space:pre-wrap; }
-
-    .inputRow{ display:flex; gap:10px; margin:6px 0 10px; }
-    #q{
-      flex:1; padding:10px 12px; border-radius:10px;
-      border:1px solid #d1d5db; outline:none; font-size:14px;
-    }
-    #btnSearch{
-      padding:10px 14px; border-radius:10px; border:0;
-      background:#111827; color:#fff; font-weight:600; cursor:pointer;
-    }
-    .btnRow{ display:flex; gap:10px; flex-wrap:wrap; margin:8px 0; }
+    .hint{ margin-top:8px; font-size:12px; color:#6b7280; }
     .btn{
       display:inline-block;
       background:#111827; color:#fff; border:none; border-radius:10px;
-      padding:10px 12px; cursor:pointer; font-size:13px; font-weight:600;
+      padding:10px 12px; cursor:pointer; font-size:13px; font-weight:700;
     }
     .btn.secondary{ background:#6b7280; }
     .btn:disabled{ opacity:0.5; cursor:not-allowed; }
-
-    .divider{ height:1px; background:#e5e7eb; margin:10px 0; }
-
-    .resultsHead{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:8px; }
-    .resultsHead .left{ display:flex; align-items:center; gap:8px; }
-    .badge{
-      min-width:20px; height:20px; border-radius:999px;
-      display:inline-flex; align-items:center; justify-content:center;
-      background:#eef2ff; color:#3730a3; font-size:12px; font-weight:700;
-      padding:0 7px;
-    }
-    .sortBtns{ display:flex; gap:10px; }
-    .sortBtn{
-      border:1px solid #e5e7eb; background:#fff; color:#111827;
-      border-radius:999px; padding:8px 10px; cursor:pointer; font-size:12px;
-    }
-    .sortBtn.active{
-      background:#111827; color:#fff; border-color:#111827;
-    }
-
-    .list{
-      margin-top:8px;
-      max-height:260px;
-      overflow:auto;
-      border:1px solid #e5e7eb; border-radius:12px;
+    .input{
+      flex:1; min-width:220px;
+      border:1px solid #e5e7eb; border-radius:10px;
+      padding:10px 12px; outline:none; font-size:14px;
       background:#fff;
     }
-    .item{
-      padding:10px 12px;
-      border-bottom:1px solid #f1f5f9;
+    .section{ margin-top:10px; padding-top:10px; border-top:1px solid #eee; }
+    .pill{
+      display:inline-flex; align-items:center; gap:8px;
+      border:1px solid #e5e7eb; border-radius:999px;
+      padding:6px 10px; font-size:12px; background:#fff;
       cursor:pointer;
     }
-    .item:last-child{ border-bottom:0; }
+    .pill.active{ background:#111827; color:#fff; border-color:#111827; }
+    .list{ margin-top:10px; max-height:220px; overflow:auto; border:1px solid #eee; border-radius:12px; background:#fff; }
+    .item{
+      padding:10px 12px; border-bottom:1px solid #f1f5f9;
+      cursor:pointer;
+    }
     .item:hover{ background:#f8fafc; }
-    .itemTop{ display:flex; justify-content:space-between; gap:10px; }
-    .name{ font-weight:700; font-size:13px; color:#111827; }
-    .meta{ font-size:12px; color:#374151; margin-top:2px; }
-    .pill{
-      font-size:12px; font-weight:700;
-      background:#ecfeff; color:#155e75;
-      border:1px solid #cffafe; border-radius:999px;
-      padding:4px 8px; white-space:nowrap;
-      height: fit-content;
+    .item:last-child{ border-bottom:none; }
+    .itemTitle{ font-weight:800; font-size:13px; margin-bottom:4px; }
+    .itemMeta{ font-size:12px; color:#374151; display:flex; gap:10px; flex-wrap:wrap; }
+    .badge{
+      display:inline-flex; align-items:center;
+      padding:2px 8px; border-radius:999px;
+      border:1px solid #e5e7eb; font-size:12px; color:#111827;
+      background:#fff;
     }
-
-    .legend{ margin-top:10px; font-size:12px; line-height:1.45; }
-    .swatch{
-      display:inline-block; width:10px; height:10px; border-radius:2px;
-      margin-right:6px; border:1px solid rgba(0,0,0,0.2);
-    }
+    .legend{ margin-top:10px; font-size:12px; line-height:1.35; }
+    .swatch{ display:inline-block; width:12px; height:12px; border-radius:999px; margin-right:8px; border:2px solid rgba(255,255,255,0.9); box-shadow:0 0 0 1px rgba(0,0,0,0.12); }
   </style>
 </head>
+
 <body>
   <div id="map"></div>
 
   <div class="panel">
     <div class="title">Driver view (Cardiff only)</div>
 
-    <div class="inputRow">
-      <input id="q" placeholder="Search address/place (e.g., CF10 3AT, 1 King Edward VII Ave)" />
-      <button id="btnSearch">Search</button>
+    <!-- Search -->
+    <div class="row">
+      <input id="searchInput" class="input" placeholder="Search address/place (e.g., CF10 3AT, Abacws)" />
+      <button id="btnSearch" class="btn">Search</button>
     </div>
 
-    <div class="btnRow">
+    <!-- Origin / Recommend -->
+    <div class="row">
       <button id="btnMyLoc" class="btn secondary">Use my location</button>
-      <button id="btnRecommend" class="btn">Recommend best chargers (ETA)</button>
+      <button id="btnRecommend" class="btn" disabled>Recommend best chargers (ETA)</button>
     </div>
 
     <div class="row">
-      <input id="unlock" type="checkbox" />
-      <label for="unlock" class="small"><b>Unlock map</b> (allow pan/search outside Cardiff)</label>
+      <label class="small"><input id="ckUnlock" type="checkbox"> Unlock map (allow pan/search outside Cardiff)</label>
     </div>
 
-    <div class="divider"></div>
+    <!-- Layers -->
+    <div class="row">
+      <label><input id="ckTraffic" type="checkbox" checked> Live traffic</label>
+      <label><input id="ckSupply" type="checkbox" checked> Existing chargers</label>
+      <label><input id="ckLSOA" type="checkbox"> LSOA boundary (optional)</label>
+      <label><input id="ckPlanned" type="checkbox"> Planned sites (optional)</label>
+    </div>
 
-    <div class="row"><input id="lyTraffic" type="checkbox" checked><label for="lyTraffic">Live traffic</label></div>
-    <div class="row"><input id="lySupply" type="checkbox" checked><label for="lySupply">Existing chargers</label></div>
-    <div class="row"><input id="lyLSOA" type="checkbox"><label for="lyLSOA">LSOA boundary (optional)</label></div>
+    <div class="hint">Tip: traffic lines are clearer at zoom ≥ 12. You can click on the map to set an origin (fallback).</div>
+
+    <!-- Results -->
+    <div class="section">
+      <div class="row" style="justify-content:space-between;">
+        <div class="row" style="margin:0;">
+          <div style="font-weight:800;">Best options</div>
+          <span class="badge" id="countBadge">0</span>
+        </div>
+        <div class="row" style="margin:0;">
+          <span class="pill active" id="sortEta">Sort: ETA</span>
+          <span class="pill" id="sortDist">Sort: Distance</span>
+          <span class="pill" id="sortBal">Sort: Balanced</span>
+        </div>
+      </div>
+
+      <div class="muted" id="emptyHint">No results yet. Set origin (search / my location / click map) → Recommend.</div>
+      <div class="list" id="resultList" style="display:none;"></div>
+    </div>
 
     <div id="status" class="status"></div>
-    <div class="hint">Tip: traffic lines are clearer at zoom ≥ 12. Click on map to set origin if location is denied.</div>
-
-    <div class="divider"></div>
-
-    <div class="resultsHead">
-      <div class="left">
-        <b>Best options</b> <span id="count" class="badge">0</span>
-      </div>
-      <div class="sortBtns">
-        <button id="sortEta" class="sortBtn active">Sort: ETA</button>
-        <button id="sortDist" class="sortBtn">Sort: Distance</button>
-      </div>
-    </div>
-    <div id="list" class="list">
-      <div class="item" style="cursor:default;">
-        <div class="name">No results yet.</div>
-        <div class="meta">Set origin (search / my location / click map) → Recommend.</div>
-      </div>
-    </div>
-
-    <div class="divider"></div>
 
     <div class="legend">
       <b>Legend</b><br/>
-      <div><span class="swatch" style="background:#2563eb;"></span><b>Blue</b>: existing chargers (bigger + thick white outline)</div>
-      <div><span class="swatch" style="background:#93c5fd;"></span><b>LSOA</b>: boundary fill (optional)</div>
-      <div class="small" style="margin-top:6px;">
-        Note: planned sites / demand centroids are planning layers — keep them in Planner view.
-      </div>
+      <div><span class="swatch" style="background:#2563eb;"></span>Blue dots: existing chargers (bigger + thick white outline; hover to highlight)</div>
+      <div><span class="swatch" style="background:#ef4444; clip-path: polygon(50% 0%, 0% 100%, 100% 100%); border-radius:2px;"></span>Red triangles: planned sites (optional / planner layer)</div>
+      <div class="muted" style="margin-top:6px;">Note: demand centroids are planning-only layers → keep them in Planner view by default.</div>
     </div>
   </div>
 
@@ -156,634 +129,663 @@
     // ====== PUT YOUR KEY HERE ======
     const GMAPS_KEY = "AIzaSyAUproFl8jRStUlFwOKbQ8yh2CjNJ_H2c4";
 
-    // Driver view loads only LSOA (for Cardiff bounds) + supply chargers
     const BASE = new URL("./", window.location.href);
     const DATA_URLS = {
+      supply: new URL("data/processed/supply_chargers_ocm.geojson", BASE).href,
       lsoa:   new URL("data/processed/demand_lsoa_cardiff_exact.geojson", BASE).href,
-      supply: new URL("data/processed/supply_chargers_ocm.geojson", BASE).href
+      planned:new URL("data/processed/new_sites_p10.geojson", BASE).href // optional
     };
 
-    // fallback Cardiff bbox (used before LSOA bounds computed)
-    const FALLBACK_CARDIFF = { north: 51.566, south: 51.410, east: -3.065, west: -3.335 };
+    // Cardiff bounds (fallback)
+    const CARDIFF_BOUNDS = { north: 51.566, south: 51.410, east: -3.065, west: -3.333 };
 
-    // map globals
-    let map, info, trafficLayer, lsoaLayer;
-    let supplyMarkers = [];
+    // Globals
+    let map, info;
+    let trafficLayer, lsoaLayer, supplyLayer, plannedLayer;
     let originMarker = null;
     let originLatLng = null;
 
-    let directionsService, directionsRenderer, distanceMatrixService;
+    let directionsService = null;
+    let directionsRenderer = null;
+    let distanceMatrixService = null;
 
-    let cardiffBoundsLiteral = null;
-    let cardiffBoundsObj = null;
-    let lockListener = null;
+    // supply cache: [{lat,lng,name,id,props}]
+    let supplyPoints = [];
+    let plannedPoints = [];
 
-    let sortMode = "eta"; // "eta" | "dist"
+    // UI state
+    let sortMode = "eta"; // "eta" | "dist" | "bal"
     let lastResults = [];
-
-    // Icons (MUST be created AFTER google exists => inside initMap)
-    let ICON_SUPPLY_NORMAL = null;
-    let ICON_SUPPLY_HOVER  = null;
 
     function setStatus(msg) {
       document.getElementById("status").textContent = msg || "";
     }
 
-    function escapeHtml(s){
-      return String(s ?? "").replace(/[&<>"']/g, (c) => ({
-        "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+    function escapeHtml(s) {
+      return String(s || "").replace(/[&<>"']/g, (c) => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
       }[c]));
     }
 
     async function loadGeoJSON(url) {
       const res = await fetch(url, { cache: "no-store" });
-      if (!res.ok) throw new Error(`Fetch failed: ${res.status}  ${url}`);
+      if (!res.ok) throw new Error(`Fetch failed: ${res.status} ${url}`);
       return await res.json();
     }
 
-    function setMarkersVisible(markers, on) {
-      for (const m of markers) m.setMap(on ? map : null);
+    function inCardiff(latLng) {
+      const lat = latLng.lat(), lng = latLng.lng();
+      return lat <= CARDIFF_BOUNDS.north && lat >= CARDIFF_BOUNDS.south
+          && lng <= CARDIFF_BOUNDS.east  && lng >= CARDIFF_BOUNDS.west;
     }
 
-    function insideCardiffLatLng(latlng){
-      const b = cardiffBoundsLiteral || FALLBACK_CARDIFF;
-      return latlng.lat() <= b.north && latlng.lat() >= b.south && latlng.lng() >= b.west && latlng.lng() <= b.east;
-    }
-
-    function applyCardiffLock(on){
-      if(lockListener){
-        google.maps.event.removeListener(lockListener);
-        lockListener = null;
-      }
-      if(!on){
+    function applyMapRestriction(locked) {
+      if (locked) {
+        map.setOptions({
+          restriction: { latLngBounds: CARDIFF_BOUNDS, strictBounds: true }
+        });
+        // keep view in Cardiff
+        map.fitBounds(CARDIFF_BOUNDS);
+      } else {
         map.setOptions({ restriction: null });
-        return;
       }
-      if(!cardiffBoundsObj){
-        cardiffBoundsObj = new google.maps.LatLngBounds(
-          new google.maps.LatLng(FALLBACK_CARDIFF.south, FALLBACK_CARDIFF.west),
-          new google.maps.LatLng(FALLBACK_CARDIFF.north, FALLBACK_CARDIFF.east)
-        );
-        cardiffBoundsLiteral = {...FALLBACK_CARDIFF};
-      }
-      map.setOptions({
-        restriction: {
-          latLngBounds: cardiffBoundsObj,
-          strictBounds: true
-        }
-      });
-      lockListener = map.addListener("dragend", () => {
-        if(!cardiffBoundsObj.contains(map.getCenter())){
-          map.fitBounds(cardiffBoundsObj);
-        }
-      });
     }
 
-    function fitBoundsFromGeoJSONPolygon(geojson) {
-      const bounds = new google.maps.LatLngBounds();
-      let added = 0;
+    function setOrigin(latLng, label) {
+      originLatLng = latLng;
 
-      function addCoord(lng, lat) {
-        if (typeof lat !== "number" || typeof lng !== "number") return;
-        if (!isFinite(lat) || !isFinite(lng)) return;
-        if (lat < -85 || lat > 85) return;
-        if (lng < -180 || lng > 180) return;
-        bounds.extend({ lat, lng });
-        added++;
+      if (!originMarker) {
+        originMarker = new google.maps.Marker({
+          position: latLng,
+          map,
+          title: "Origin",
+          icon: {
+            path: google.maps.SymbolPath.CIRCLE,
+            fillColor: "#111827",
+            fillOpacity: 1,
+            strokeColor: "#ffffff",
+            strokeWeight: 3,
+            scale: 8
+          },
+          zIndex: 999999
+        });
+      } else {
+        originMarker.setPosition(latLng);
+        originMarker.setMap(map);
       }
 
-      for (const f of (geojson.features || [])) {
-        const g = f.geometry;
-        if (!g) continue;
+      map.panTo(latLng);
 
-        if (g.type === "Polygon") {
-          for (const ring of g.coordinates || []) {
-            for (const [lng, lat] of ring || []) addCoord(lng, lat);
-          }
-        } else if (g.type === "MultiPolygon") {
-          for (const poly of g.coordinates || []) {
-            for (const ring of poly || []) {
-              for (const [lng, lat] of ring || []) addCoord(lng, lat);
-            }
-          }
-        }
-      }
-
-      if (added > 10) {
-        const ne = bounds.getNorthEast();
-        const sw = bounds.getSouthWest();
-        cardiffBoundsLiteral = { north: ne.lat(), south: sw.lat(), east: ne.lng(), west: sw.lng() };
-        cardiffBoundsObj = bounds;
-        map.fitBounds(bounds);
-        return true;
-      }
-      return false;
+      document.getElementById("btnRecommend").disabled = false;
+      setStatus(`Origin set: ${label || (latLng.toUrlValue ? latLng.toUrlValue(5) : "")}\nClick "Recommend" to rank chargers by traffic-aware ETA.`);
     }
 
-    function setOrigin(latlng, label){
-      originLatLng = latlng;
-      if(originMarker) originMarker.setMap(null);
+    // Haversine distance (meters)
+    function haversineMeters(a, b) {
+      const R = 6371000;
+      const toRad = (x) => x * Math.PI / 180;
+      const lat1 = a.lat(), lon1 = a.lng();
+      const lat2 = b.lat, lon2 = b.lng;
+      const dLat = toRad(lat2 - lat1);
+      const dLon = toRad(lon2 - lon1);
+      const s1 = Math.sin(dLat/2), s2 = Math.sin(dLon/2);
+      const aa = s1*s1 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*s2*s2;
+      return 2*R*Math.asin(Math.min(1, Math.sqrt(aa)));
+    }
 
-      originMarker = new google.maps.Marker({
-        position: latlng,
-        title: label || "Origin",
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          fillColor: "#111827",
-          fillOpacity: 1,
-          strokeColor: "#ffffff",
-          strokeOpacity: 1,
-          strokeWeight: 3,
-          scale: 7
+    // ---------- Places API (New) Text Search (New) ----------
+    // Uses: POST https://places.googleapis.com/v1/places:searchText
+    // Doc: Text Search (New) :contentReference[oaicite:1]{index=1}
+    async function placesTextSearch(query, useBiasCardiff = true) {
+      const body = {
+        textQuery: query,
+        maxResultCount: 5,
+        languageCode: "en",
+        regionCode: "GB"
+      };
+
+      if (useBiasCardiff) {
+        body.locationBias = {
+          rectangle: {
+            low:  { latitude: CARDIFF_BOUNDS.south, longitude: CARDIFF_BOUNDS.west },
+            high: { latitude: CARDIFF_BOUNDS.north, longitude: CARDIFF_BOUNDS.east }
+          }
+        };
+      }
+
+      const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Goog-Api-Key": GMAPS_KEY,
+          "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.location,places.id"
         },
-        zIndex: google.maps.Marker.MAX_ZINDEX + 2
+        body: JSON.stringify(body)
       });
-      originMarker.setMap(map);
 
-      setStatus(`Origin set:\n${label || `${latlng.lat().toFixed(5)}, ${latlng.lng().toFixed(5)}`}\n\nClick “Recommend best chargers (ETA)” to rank.`);
-    }
-
-    function initLayersUI(){
-      const lyTraffic = document.getElementById("lyTraffic");
-      const lySupply  = document.getElementById("lySupply");
-      const lyLSOA    = document.getElementById("lyLSOA");
-
-      lyTraffic.addEventListener("change", () => trafficLayer.setMap(lyTraffic.checked ? map : null));
-      lySupply.addEventListener("change",  () => setMarkersVisible(supplyMarkers, lySupply.checked));
-      lyLSOA.addEventListener("change",    () => lsoaLayer.setMap(lyLSOA.checked ? map : null));
-    }
-
-    function makeSupplyMarkers(geojson){
-      const feats = geojson.features || [];
-      const markers = [];
-
-      for(const f of feats){
-        if(!f.geometry || f.geometry.type !== "Point") continue;
-        const [lng, lat] = f.geometry.coordinates || [];
-        if(typeof lat !== "number" || typeof lng !== "number") continue;
-
-        const name =
-          (f.properties && (
-            f.properties.name ||
-            f.properties.operator ||
-            f.properties.location ||
-            f.properties.Address ||
-            f.properties.address ||
-            f.properties.Site ||
-            f.properties.site
-          )) || "Charger";
-
-        const m = new google.maps.Marker({
-          position: {lat,lng},
-          icon: ICON_SUPPLY_NORMAL,
-          title: name,
-          zIndex: 1000,
-          optimized: true
-        });
-
-        // hover: larger + clear tooltip
-        m.addListener("mouseover", () => {
-          m.setIcon(ICON_SUPPLY_HOVER);
-          m.setZIndex(google.maps.Marker.MAX_ZINDEX + 1);
-          info.setContent(`<b>${escapeHtml(name)}</b>`);
-          info.open(map, m);
-        });
-        m.addListener("mouseout", () => {
-          m.setIcon(ICON_SUPPLY_NORMAL);
-          m.setZIndex(1000);
-          info.close();
-        });
-
-        // click: set destination and hint to recommend
-        m.addListener("click", () => {
-          info.setContent(`<b>${escapeHtml(name)}</b><br/>Destination highlighted.<br/>Click “Recommend” to compare ETAs.`);
-          info.open(map, m);
-        });
-
-        m.setMap(map);
-        markers.push(m);
+      if (!res.ok) {
+        const t = await res.text().catch(()=> "");
+        throw new Error(`Places search failed (${res.status}). ${t}`);
       }
-      return markers;
+
+      const data = await res.json();
+      return (data.places || []);
     }
 
-    function renderResults(items){
-      const list = document.getElementById("list");
-      const count = document.getElementById("count");
-      count.textContent = String(items.length);
+    // ---------- Visual styles (after google is ready) ----------
+    function supplyIcon(scale, strokeW, fill = "#2563eb") {
+      return {
+        path: google.maps.SymbolPath.CIRCLE,
+        fillColor: fill,
+        fillOpacity: 1,
+        strokeColor: "#ffffff",
+        strokeOpacity: 1,
+        strokeWeight: strokeW,
+        scale
+      };
+    }
 
-      list.innerHTML = "";
-      if(!items.length){
-        list.innerHTML = `
-          <div class="item" style="cursor:default;">
-            <div class="name">No results yet.</div>
-            <div class="meta">Set origin (search / my location / click map) → Recommend.</div>
-          </div>`;
+    function plannedIcon() {
+      return {
+        path: google.maps.SymbolPath.BACKWARD_CLOSED_ARROW,
+        fillColor: "#ef4444",
+        fillOpacity: 0.95,
+        strokeColor: "#ffffff",
+        strokeOpacity: 1,
+        strokeWeight: 1,
+        scale: 7
+      };
+    }
+
+    function initSupplyLayerStyles() {
+      supplyLayer.setStyle((feature) => {
+        return {
+          icon: supplyIcon(9, 4),
+          zIndex: 1000
+        };
+      });
+
+      // hover highlight
+      supplyLayer.addListener("mouseover", (e) => {
+        supplyLayer.overrideStyle(e.feature, { icon: supplyIcon(12, 5, "#1d4ed8"), zIndex: 9999 });
+        const name = e.feature.getProperty("name") || "Charger";
+        info.setContent(`<b>${escapeHtml(name)}</b><br/>Hover highlight`);
+        info.setPosition(e.latLng);
+        info.open({ map });
+      });
+
+      supplyLayer.addListener("mouseout", (e) => {
+        supplyLayer.revertStyle(e.feature);
+        info.close();
+      });
+
+      // click: set destination preview
+      supplyLayer.addListener("click", (e) => {
+        const name = e.feature.getProperty("name") || "Charger";
+        info.setContent(`<b>${escapeHtml(name)}</b><br/>Click "Recommend" to compare ETAs from your origin.`);
+        info.setPosition(e.latLng);
+        info.open({ map });
+      });
+    }
+
+    function initPlannedLayerStyles() {
+      plannedLayer.setStyle(() => ({ icon: plannedIcon(), zIndex: 900 }));
+      plannedLayer.addListener("click", (e) => {
+        const id = e.feature.getProperty("id") || e.feature.getProperty("site_id") || "planned";
+        info.setContent(`<b>Planned site</b><br/>id: ${escapeHtml(id)}<br/>(Planner layer - optional)`);
+        info.setPosition(e.latLng);
+        info.open({ map });
+      });
+    }
+
+    // ---------- Routing / ETA ranking ----------
+    function getNearestCandidates(origin, maxN = 25) {
+      const scored = supplyPoints.map((p) => ({
+        ...p,
+        crowMeters: haversineMeters(origin, p)
+      }));
+      scored.sort((a,b) => a.crowMeters - b.crowMeters);
+      // optionally filter within 12km, else fallback to top N
+      const within = scored.filter(x => x.crowMeters <= 12000);
+      const pick = (within.length >= 8 ? within : scored).slice(0, maxN);
+      return pick;
+    }
+
+    function km(m) { return (m/1000).toFixed(1); }
+    function fmtSec(s) {
+      if (!isFinite(s) || s < 0) return "n/a";
+      const m = Math.round(s/60);
+      if (m < 60) return `${m} min`;
+      const h = Math.floor(m/60);
+      const mm = m % 60;
+      return `${h}h ${mm}m`;
+    }
+
+    function scoreBalanced(item) {
+      // Balanced = ETA + distance + (optional) charging power
+      // Transparent rule: lower is better
+      const etaMin = item.etaTrafficSec / 60;
+      const distKm = item.distanceMeters / 1000;
+      const power = Number(item.power_kw || item.power || 0); // if you have it in your geojson
+      const powerBonus = power > 0 ? (50 / Math.min(350, Math.max(50, power))) : 1.0; // ~1.0–2.0
+      return (etaMin * 1.0 + distKm * 1.5) * powerBonus;
+    }
+
+    async function computeMatrixDistance(origin, candidates) {
+      // Use legacy DistanceMatrixService (most stable inside Maps JS).
+      // If your project hasn't enabled Distance Matrix API, this will fail and we will show a helpful message.
+      return new Promise((resolve, reject) => {
+        const destLatLngs = candidates.map(c => new google.maps.LatLng(c.lat, c.lng));
+
+        distanceMatrixService.getDistanceMatrix({
+          origins: [origin],
+          destinations: destLatLngs,
+          travelMode: google.maps.TravelMode.DRIVING,
+          drivingOptions: {
+            departureTime: new Date(),
+            trafficModel: google.maps.TrafficModel.BEST_GUESS
+          },
+          unitSystem: google.maps.UnitSystem.METRIC
+        }, (resp, status) => {
+          if (status !== "OK" || !resp || !resp.rows || !resp.rows[0]) {
+            reject(new Error("Distance Matrix failed: " + status));
+            return;
+          }
+          const els = resp.rows[0].elements || [];
+          resolve(els);
+        });
+      });
+    }
+
+    async function recommend() {
+      if (!originLatLng) {
+        setStatus("Please set origin first (search / my location / click map).");
         return;
       }
 
-      for(const it of items){
+      const t0 = performance.now();
+      setStatus("Selecting nearest candidates…");
+      const candidates = getNearestCandidates(originLatLng, 25);
+
+      setStatus(`Computing ETA with traffic for ${candidates.length} candidates…`);
+      let elements;
+      try {
+        elements = await computeMatrixDistance(originLatLng, candidates);
+      } catch (e) {
+        setStatus(
+          "ETA ranking failed.\n" +
+          String(e) + "\n\n" +
+          "Fix:\n" +
+          "1) Ensure Distance Matrix API + Directions API are enabled for this key/project.\n" +
+          "2) Ensure billing is enabled and key restrictions include your domain.\n"
+        );
+        return;
+      }
+
+      const results = [];
+      for (let i = 0; i < candidates.length; i++) {
+        const el = elements[i];
+        if (!el || el.status !== "OK") continue;
+
+        const dist = el.distance?.value ?? NaN;
+        const dur = el.duration?.value ?? NaN;
+        const durT = el.duration_in_traffic?.value ?? dur; // fallback
+        results.push({
+          ...candidates[i],
+          distanceMeters: dist,
+          durationSec: dur,
+          etaTrafficSec: durT,
+          delaySec: (isFinite(durT) && isFinite(dur)) ? Math.max(0, durT - dur) : NaN
+        });
+      }
+
+      // store and sort according to current mode
+      lastResults = results.slice();
+      applySortingAndRender();
+
+      const t1 = performance.now();
+      setStatus(`Done in ${(t1 - t0).toFixed(0)} ms. Showing Top 5 (traffic-aware ETA).`);
+    }
+
+    function applySortingAndRender() {
+      const items = lastResults.slice();
+
+      if (sortMode === "eta") items.sort((a,b) => a.etaTrafficSec - b.etaTrafficSec);
+      else if (sortMode === "dist") items.sort((a,b) => a.distanceMeters - b.distanceMeters);
+      else if (sortMode === "bal") items.sort((a,b) => scoreBalanced(a) - scoreBalanced(b));
+
+      const top5 = items.slice(0, 5);
+      renderList(top5);
+    }
+
+    function openNavigation(origin, dest) {
+      const o = `${origin.lat()},${origin.lng()}`;
+      const d = `${dest.lat},${dest.lng}`;
+      const url = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(o)}&destination=${encodeURIComponent(d)}&travelmode=driving`;
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+
+    function drawRouteTo(dest) {
+      if (!originLatLng) return;
+
+      // Draw route preview (legacy DirectionsService).
+      // If Directions API isn't enabled, we'll still allow "Open in Google Maps" as a fallback.
+      directionsService.route({
+        origin: originLatLng,
+        destination: new google.maps.LatLng(dest.lat, dest.lng),
+        travelMode: google.maps.TravelMode.DRIVING,
+        drivingOptions: {
+          departureTime: new Date(),
+          trafficModel: google.maps.TrafficModel.BEST_GUESS
+        }
+      }, (res, status) => {
+        if (status !== "OK" || !res) {
+          setStatus("Route preview failed: " + status + "\nYou can still click 'Open navigation' in the list.");
+          return;
+        }
+        directionsRenderer.setDirections(res);
+      });
+    }
+
+    function renderList(items) {
+      const list = document.getElementById("resultList");
+      const empty = document.getElementById("emptyHint");
+      const badge = document.getElementById("countBadge");
+
+      badge.textContent = String(items.length);
+
+      if (!items.length) {
+        list.style.display = "none";
+        empty.style.display = "block";
+        return;
+      }
+
+      empty.style.display = "none";
+      list.style.display = "block";
+      list.innerHTML = "";
+
+      items.forEach((it, idx) => {
         const div = document.createElement("div");
         div.className = "item";
-        div.innerHTML = `
-          <div class="itemTop">
-            <div>
-              <div class="name">${escapeHtml(it.name)}</div>
-              <div class="meta">Distance: ${escapeHtml(it.distanceText)} · Normal: ${escapeHtml(it.durationText)}</div>
-              <div class="meta"><b>ETA (traffic): ${escapeHtml(it.trafficText)}</b> · Delay: ${escapeHtml(it.delayText)}</div>
-            </div>
-            <div class="pill">${escapeHtml(it.rankLabel)}</div>
-          </div>
+
+        const title = document.createElement("div");
+        title.className = "itemTitle";
+        title.textContent = `${idx+1}. ${it.name || "Charger"}`;
+
+        const meta = document.createElement("div");
+        meta.className = "itemMeta";
+        const eta = fmtSec(it.etaTrafficSec);
+        const dist = isFinite(it.distanceMeters) ? `${km(it.distanceMeters)} km` : "n/a";
+        const delay = isFinite(it.delaySec) ? `+${Math.round(it.delaySec/60)} min traffic` : "traffic Δ n/a";
+
+        meta.innerHTML = `
+          <span class="badge">ETA: ${escapeHtml(eta)}</span>
+          <span class="badge">Distance: ${escapeHtml(dist)}</span>
+          <span class="badge">${escapeHtml(delay)}</span>
+          <span class="badge">Availability: unknown</span>
         `;
 
+        const actions = document.createElement("div");
+        actions.className = "itemMeta";
+        actions.style.marginTop = "6px";
+        actions.innerHTML = `
+          <span class="badge" style="cursor:pointer;">Route preview</span>
+          <span class="badge" style="cursor:pointer;">Open navigation</span>
+        `;
+
+        const [btnPreview, btnNav] = actions.querySelectorAll(".badge");
+
+        btnPreview.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          drawRouteTo(it);
+        });
+        btnNav.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          openNavigation(originLatLng, it);
+        });
+
+        div.appendChild(title);
+        div.appendChild(meta);
+        div.appendChild(actions);
+
         div.addEventListener("click", () => {
-          drawRoute(originLatLng, it.latlng, it.name);
+          // focus and preview
+          map.panTo({ lat: it.lat, lng: it.lng });
+          map.setZoom(Math.max(map.getZoom(), 14));
+          drawRouteTo(it);
+          info.setContent(`<b>${escapeHtml(it.name || "Charger")}</b><br/>ETA: ${escapeHtml(fmtSec(it.etaTrafficSec))}<br/>Distance: ${escapeHtml(isFinite(it.distanceMeters)? km(it.distanceMeters)+" km":"n/a")}`);
+          info.setPosition({ lat: it.lat, lng: it.lng });
+          info.open({ map });
         });
 
         list.appendChild(div);
-      }
-    }
-
-    function setSortButtons(){
-      document.getElementById("sortEta").classList.toggle("active", sortMode === "eta");
-      document.getElementById("sortDist").classList.toggle("active", sortMode === "dist");
-    }
-
-    function applySortAndRender(){
-      if(!lastResults.length){
-        renderResults([]);
-        return;
-      }
-      const items = [...lastResults];
-      if(sortMode === "eta"){
-        items.sort((a,b) => a.trafficValue - b.trafficValue);
-      }else{
-        items.sort((a,b) => a.distanceValue - b.distanceValue);
-      }
-      items.forEach((x,i) => x.rankLabel = `#${i+1}`);
-      renderResults(items);
-    }
-
-    function msToText(sec){
-      const m = Math.round(sec/60);
-      if(m < 60) return `${m} min`;
-      const h = Math.floor(m/60);
-      const r = m % 60;
-      return `${h} h ${r} min`;
-    }
-
-    async function recommendTop5(){
-      if(!originLatLng){
-        setStatus("Please set an origin first (Search / Use my location / click on map).");
-        return;
-      }
-      if(!supplyMarkers.length){
-        setStatus("No charger points loaded.");
-        return;
-      }
-
-      setStatus("Computing Top 5 by ETA (traffic)…");
-
-      // prefilter by straight-line distance (fast)
-      const candidates = supplyMarkers
-        .map(m => {
-          const p = m.getPosition();
-          const d = google.maps.geometry.spherical.computeDistanceBetween(originLatLng, p);
-          return { marker: m, latlng: p, name: m.getTitle() || "Charger", approxDist: d };
-        })
-        .sort((a,b) => a.approxDist - b.approxDist)
-        .slice(0, 25);
-
-      const destinations = candidates.map(c => c.latlng);
-
-      const request = {
-        origins: [originLatLng],
-        destinations,
-        travelMode: google.maps.TravelMode.DRIVING,
-        drivingOptions: {
-          departureTime: new Date(),
-          trafficModel: google.maps.TrafficModel.BEST_GUESS
-        },
-        unitSystem: google.maps.UnitSystem.METRIC
-      };
-
-      const res = await new Promise((resolve, reject) => {
-        distanceMatrixService.getDistanceMatrix(request, (r, status) => {
-          if(status !== "OK" || !r) return reject(new Error("DistanceMatrix failed: " + status));
-          resolve(r);
-        });
-      });
-
-      const el = res.rows?.[0]?.elements || [];
-      const items = [];
-
-      for(let i=0;i<el.length;i++){
-        const e = el[i];
-        if(!e || e.status !== "OK") continue;
-
-        const distVal = e.distance?.value ?? Infinity;
-        const distText = e.distance?.text ?? "(n/a)";
-
-        const durVal = e.duration?.value ?? Infinity;
-        const durText = e.duration?.text ?? "(n/a)";
-
-        const trafVal = e.duration_in_traffic?.value ?? durVal;
-        const trafText = e.duration_in_traffic?.text ?? durText;
-
-        const delaySec = Math.max(0, trafVal - durVal);
-        const delayText = delaySec > 30 ? `+${msToText(delaySec)}` : "+0 min";
-
-        items.push({
-          name: candidates[i].name,
-          latlng: candidates[i].latlng,
-          distanceValue: distVal,
-          distanceText: distText,
-          durationValue: durVal,
-          durationText: durText,
-          trafficValue: trafVal,
-          trafficText: trafText,
-          delayText,
-          rankLabel: ""
-        });
-      }
-
-      items.sort((a,b) => a.trafficValue - b.trafficValue);
-      const top5 = items.slice(0, 5);
-      top5.forEach((x,i) => x.rankLabel = `#${i+1}`);
-
-      lastResults = top5;
-      setStatus(`Loaded.\nExisting chargers: ${supplyMarkers.length}\nTop 5 computed (traffic-aware ETA).`);
-      applySortAndRender();
-    }
-
-    function drawRoute(origin, dest, destName){
-      if(!origin || !dest) return;
-
-      setStatus("Routing with traffic…");
-      directionsService.route({
-        origin,
-        destination: dest,
-        travelMode: google.maps.TravelMode.DRIVING,
-        drivingOptions: {
-          departureTime: new Date(),
-          trafficModel: google.maps.TrafficModel.BEST_GUESS
-        }
-      }, (result, status) => {
-        if(status !== "OK" || !result){
-          setStatus("Route failed: " + status);
-          return;
-        }
-        directionsRenderer.setDirections(result);
-
-        const leg = result.routes[0].legs[0];
-        const durTraffic = leg.duration_in_traffic ? leg.duration_in_traffic.text : "(n/a)";
-        const durNormal  = leg.duration ? leg.duration.text : "(n/a)";
-        setStatus(`Route preview → ${destName || "destination"}\nETA (traffic): ${durTraffic}\nNormal: ${durNormal}\nDistance: ${leg.distance?.text || "(n/a)"}`);
       });
     }
 
-    // ===== SEARCH: no need to type "Cardiff" manually =====
-    async function geocodeRequest(query, useBoundsBias){
-      const b = cardiffBoundsLiteral || FALLBACK_CARDIFF;
-      const boundsParam = `${b.south},${b.west}|${b.north},${b.east}`;
+    // ---------- UI wiring ----------
+    function setSort(mode) {
+      sortMode = mode;
 
-      const params = new URLSearchParams();
-      params.set("address", query);
-      params.set("key", GMAPS_KEY);
-      params.set("region", "uk");
-      params.set("components", "country:GB");
-      if(useBoundsBias) params.set("bounds", boundsParam);
+      document.getElementById("sortEta").classList.toggle("active", mode === "eta");
+      document.getElementById("sortDist").classList.toggle("active", mode === "dist");
+      document.getElementById("sortBal").classList.toggle("active", mode === "bal");
 
-      const url = `https://maps.googleapis.com/maps/api/geocode/json?${params.toString()}`;
-      const res = await fetch(url);
-      const data = await res.json();
-
-      if(data.status !== "OK"){
-        throw new Error(`${data.status}${data.error_message ? (": " + data.error_message) : ""}`);
-      }
-      return data.results || [];
+      if (lastResults.length) applySortingAndRender();
     }
 
-    async function geocodeSmart(query){
-      // 1) normal geocode first
-      let results = await geocodeRequest(query, false);
-      for(const r of results){
-        const loc = r.geometry.location;
-        const ll = new google.maps.LatLng(loc.lat, loc.lng);
-        if(insideCardiffLatLng(ll)){
-          return { latlng: ll, formatted: r.formatted_address || query, inside: true };
-        }
-      }
-
-      // 2) Cardiff bounds bias
-      results = await geocodeRequest(query, true);
-      for(const r of results){
-        const loc = r.geometry.location;
-        const ll = new google.maps.LatLng(loc.lat, loc.lng);
-        if(insideCardiffLatLng(ll)){
-          return { latlng: ll, formatted: r.formatted_address || query, inside: true };
-        }
-      }
-
-      // 3) if unlocked, accept first result even outside
-      const unlock = document.getElementById("unlock").checked;
-      if(unlock && results.length){
-        const loc = results[0].geometry.location;
-        const ll = new google.maps.LatLng(loc.lat, loc.lng);
-        return { latlng: ll, formatted: results[0].formatted_address || query, inside: false };
-      }
-
-      throw new Error("No matching result inside Cardiff. Enable “Unlock map” to search outside Cardiff.");
-    }
-
-    // ===== initMap: ONLY place we touch google.* at top-level =====
-    async function initMap(){
-      // create icons AFTER google is ready
-      ICON_SUPPLY_NORMAL = {
-        path: google.maps.SymbolPath.CIRCLE,
-        fillColor: "#2563eb",
-        fillOpacity: 1,
-        strokeColor: "#ffffff",
-        strokeOpacity: 1,
-        strokeWeight: 3,
-        scale: 9
-      };
-      ICON_SUPPLY_HOVER = {
-        path: google.maps.SymbolPath.CIRCLE,
-        fillColor: "#1d4ed8",
-        fillOpacity: 1,
-        strokeColor: "#ffffff",
-        strokeOpacity: 1,
-        strokeWeight: 4,
-        scale: 11
-      };
-
+    async function initMap() {
       map = new google.maps.Map(document.getElementById("map"), {
         center: { lat: 51.4816, lng: -3.1791 },
         zoom: 12,
         mapTypeControl: false,
         streetViewControl: false,
-        fullscreenControl: true
+        fullscreenControl: true,
+        restriction: { latLngBounds: CARDIFF_BOUNDS, strictBounds: true }
       });
 
       info = new google.maps.InfoWindow();
 
+      // Layers
       trafficLayer = new google.maps.TrafficLayer();
       trafficLayer.setMap(map);
 
       lsoaLayer = new google.maps.Data();
       lsoaLayer.setStyle({
         fillColor: "#93c5fd",
-        fillOpacity: 0.20,
+        fillOpacity: 0.22,
         strokeColor: "#2563eb",
-        strokeOpacity: 0.75,
-        strokeWeight: 1
+        strokeOpacity: 0.9,
+        strokeWeight: 2
       });
-      lsoaLayer.setMap(null); // off by default in driver view
+      lsoaLayer.setMap(null); // default OFF
 
-      directionsService  = new google.maps.DirectionsService();
-      directionsRenderer = new google.maps.DirectionsRenderer({ map, suppressMarkers: true });
+      supplyLayer = new google.maps.Data();
+      supplyLayer.setMap(map);
+
+      plannedLayer = new google.maps.Data();
+      plannedLayer.setMap(null); // default OFF
+
+      initSupplyLayerStyles();
+      initPlannedLayerStyles();
+
+      // Services
+      directionsService = new google.maps.DirectionsService();
+      directionsRenderer = new google.maps.DirectionsRenderer({ map, suppressMarkers: true, preserveViewport: true });
       distanceMatrixService = new google.maps.DistanceMatrixService();
 
-      initLayersUI();
-
-      // default: lock on
-      applyCardiffLock(true);
-
-      try{
-        setStatus("Loading data…");
-
-        const [lsoa, supply] = await Promise.all([
-          loadGeoJSON(DATA_URLS.lsoa),
-          loadGeoJSON(DATA_URLS.supply)
-        ]);
-
-        lsoaLayer.addGeoJson(lsoa);
-
-        const ok = fitBoundsFromGeoJSONPolygon(lsoa);
-        if(!ok){
-          cardiffBoundsLiteral = {...FALLBACK_CARDIFF};
-          cardiffBoundsObj = new google.maps.LatLngBounds(
-            new google.maps.LatLng(FALLBACK_CARDIFF.south, FALLBACK_CARDIFF.west),
-            new google.maps.LatLng(FALLBACK_CARDIFF.north, FALLBACK_CARDIFF.east)
-          );
-          map.fitBounds(cardiffBoundsObj);
-        }
-
-        applyCardiffLock(!document.getElementById("unlock").checked);
-
-        supplyMarkers = makeSupplyMarkers(supply);
-
-        setStatus(`Loaded.\nExisting chargers: ${(supply.features||[]).length}\n\nSet origin then Recommend.`);
-      }catch(err){
-        console.error(err);
-        setStatus("FAILED.\n" + String(err));
-        alert(String(err));
-      }
-
-      // click map to set origin (fallback)
-      map.addListener("click", (e) => {
-        const unlock = document.getElementById("unlock").checked;
-        if(!unlock && !insideCardiffLatLng(e.latLng)){
-          setStatus("Origin must be inside Cardiff (toggle Unlock to allow outside).");
-          return;
-        }
-        setOrigin(e.latLng, "Origin (clicked)");
+      // UI events
+      document.getElementById("ckTraffic").addEventListener("change", (e) => {
+        trafficLayer.setMap(e.target.checked ? map : null);
+      });
+      document.getElementById("ckSupply").addEventListener("change", (e) => {
+        supplyLayer.setMap(e.target.checked ? map : null);
+      });
+      document.getElementById("ckLSOA").addEventListener("change", (e) => {
+        lsoaLayer.setMap(e.target.checked ? map : null);
+      });
+      document.getElementById("ckPlanned").addEventListener("change", (e) => {
+        plannedLayer.setMap(e.target.checked ? map : null);
       });
 
-      // unlock toggle
-      document.getElementById("unlock").addEventListener("change", (e) => {
-        applyCardiffLock(!e.target.checked);
-        setStatus(e.target.checked ? "Map unlocked." : "Map locked to Cardiff bounds.");
+      document.getElementById("ckUnlock").addEventListener("change", (e) => {
+        applyMapRestriction(!e.target.checked);
       });
 
-      // search
-      document.getElementById("btnSearch").addEventListener("click", async () => {
-        const q = (document.getElementById("q").value || "").trim();
-        if(!q){
-          setStatus("Type an address/place to search.");
-          return;
-        }
-        try{
-          setStatus("Searching…");
-          const r = await geocodeSmart(q);
-          const unlock = document.getElementById("unlock").checked;
+      document.getElementById("sortEta").addEventListener("click", () => setSort("eta"));
+      document.getElementById("sortDist").addEventListener("click", () => setSort("dist"));
+      document.getElementById("sortBal").addEventListener("click", () => setSort("bal"));
 
-          if(!unlock && !r.inside){
-            setStatus("Result is outside Cardiff. Enable “Unlock map” to go there.");
-            return;
-          }
+      document.getElementById("btnRecommend").addEventListener("click", recommend);
 
-          map.panTo(r.latlng);
-          map.setZoom(14);
-          setOrigin(r.latlng, r.formatted);
-        }catch(err){
-          console.error(err);
-          setStatus("Search failed. Try a more specific address or postcode.\n\n" + String(err));
-          alert(String(err));
-        }
-      });
-
-      document.getElementById("q").addEventListener("keydown", (e) => {
-        if(e.key === "Enter") document.getElementById("btnSearch").click();
-      });
-
-      // my location
       document.getElementById("btnMyLoc").addEventListener("click", () => {
         setStatus("Getting your location…");
         navigator.geolocation.getCurrentPosition(
           (pos) => {
             const ll = new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude);
-            const unlock = document.getElementById("unlock").checked;
-
-            if(!unlock && !insideCardiffLatLng(ll)){
-              setStatus("Your location is outside Cardiff. Enable Unlock to use it.");
+            const unlocked = document.getElementById("ckUnlock").checked;
+            if (!unlocked && !inCardiff(ll)) {
+              setStatus("Your location is outside Cardiff. Turn on 'Unlock map' to use it.");
               return;
             }
-
-            map.panTo(ll);
-            map.setZoom(14);
-            setOrigin(ll, "Origin (my location)");
+            setOrigin(ll, "My location");
           },
           (err) => {
-            console.error(err);
-            setStatus("Geolocation denied/unavailable.\nClick on map to set origin.");
-            alert("Cannot access location: " + err.message);
+            setStatus("Geolocation denied/unavailable. You can click on the map to set origin (fallback).");
           },
           { enableHighAccuracy: true, timeout: 8000 }
         );
       });
 
-      // recommend
-      document.getElementById("btnRecommend").addEventListener("click", async () => {
-        try{
-          await recommendTop5();
-        }catch(err){
-          console.error(err);
-          setStatus("Recommend failed.\n" + String(err));
-          alert(String(err));
+      // Fallback: click map to set origin
+      map.addListener("click", (e) => {
+        const unlocked = document.getElementById("ckUnlock").checked;
+        if (!unlocked && !inCardiff(e.latLng)) {
+          setStatus("Map is locked to Cardiff. Turn on 'Unlock map' if needed.");
+          return;
+        }
+        setOrigin(e.latLng, "Clicked on map");
+      });
+
+      // Search button (Places API New: Text Search New)
+      document.getElementById("btnSearch").addEventListener("click", async () => {
+        const q = (document.getElementById("searchInput").value || "").trim();
+        if (!q) return;
+
+        const unlocked = document.getElementById("ckUnlock").checked;
+        setStatus("Searching…");
+
+        try {
+          const places = await placesTextSearch(q, !unlocked);
+          if (!places.length) {
+            setStatus("Search failed. Try another query.");
+            return;
+          }
+
+          // pick best result
+          const p = places[0];
+          const loc = p.location;
+          const ll = new google.maps.LatLng(loc.latitude, loc.longitude);
+
+          if (!unlocked && !inCardiff(ll)) {
+            setStatus("Found a match, but it is outside Cardiff. Turn on 'Unlock map' to accept it.");
+            return;
+          }
+
+          const label = `${p.displayName?.text || "Place"} – ${p.formattedAddress || ""}`;
+          setOrigin(ll, label);
+
+        } catch (err) {
+          setStatus(
+            "Search failed.\n" + String(err) + "\n\n" +
+            "Fix:\n" +
+            "1) Ensure Places API (New) is enabled for this project.\n" +
+            "2) Ensure your API key allows requests from this domain (HTTP referrer restriction).\n" +
+            "3) Billing must be enabled.\n"
+          );
         }
       });
 
-      // sorting
-      document.getElementById("sortEta").addEventListener("click", () => {
-        sortMode = "eta";
-        setSortButtons();
-        applySortAndRender();
-      });
-      document.getElementById("sortDist").addEventListener("click", () => {
-        sortMode = "dist";
-        setSortButtons();
-        applySortAndRender();
-      });
-      setSortButtons();
+      // Load data
+      try {
+        setStatus("Loading GeoJSON…");
+
+        const [supply, lsoa, planned] = await Promise.all([
+          loadGeoJSON(DATA_URLS.supply),
+          loadGeoJSON(DATA_URLS.lsoa),
+          loadGeoJSON(DATA_URLS.planned).catch(() => null) // optional
+        ]);
+
+        // supply → Data layer + cache array
+        supplyLayer.addGeoJson(supply);
+        supplyPoints = [];
+        for (const f of (supply.features || [])) {
+          if (!f.geometry || f.geometry.type !== "Point") continue;
+          const [lng, lat] = f.geometry.coordinates || [];
+          if (typeof lat !== "number" || typeof lng !== "number") continue;
+
+          const props = f.properties || {};
+          const name =
+            props.name || props.operator || props.location || props.Address || props.address ||
+            props.Site || props.site || "Charger";
+
+          supplyPoints.push({
+            lat, lng,
+            name,
+            id: props.id || props.ID || props.ocm_id || props.site_id || "",
+            power_kw: props.power_kw || props.power || props.max_kw || 0,
+            props
+          });
+
+          // write readable name into feature property for hover
+          // (Data layer already has the feature; we can set on the layer side too)
+        }
+
+        // Make sure features have "name"
+        supplyLayer.forEach((feature) => {
+          if (!feature.getProperty("name")) {
+            // Try infer from known keys (if your geojson has them)
+            const candidate =
+              feature.getProperty("operator") ||
+              feature.getProperty("location") ||
+              feature.getProperty("Address") ||
+              feature.getProperty("address") ||
+              feature.getProperty("Site") ||
+              "Charger";
+            feature.setProperty("name", candidate);
+          }
+        });
+
+        // LSOA boundary optional
+        lsoaLayer.addGeoJson(lsoa);
+
+        // Planned sites optional (OFF by default)
+        if (planned) {
+          plannedLayer.addGeoJson(planned);
+          plannedPoints = [];
+        }
+
+        // Fit to Cardiff bounds
+        map.fitBounds(CARDIFF_BOUNDS);
+        setStatus(
+          `Loaded.\n` +
+          `Existing chargers: ${supplyPoints.length}\n` +
+          `LSOA polygons: ${(lsoa.features||[]).length}\n` +
+          `Planned sites: ${(planned && planned.features)? planned.features.length : 0}\n\n` +
+          `Set origin → Recommend (Top 5 by traffic-aware ETA).`
+        );
+      } catch (err) {
+        console.error(err);
+        setStatus("FAILED.\n" + String(err));
+        alert(String(err));
+      }
     }
 
+    // Important: callback must be global
     window.initMap = initMap;
 
-    // Load Maps JS (geometry needed)
-    (function loadGoogleMaps(){
+    (function loadGoogleMaps() {
       const s = document.createElement("script");
-      s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GMAPS_KEY)}&callback=initMap&v=weekly&libraries=geometry`;
+      s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GMAPS_KEY)}&callback=initMap&v=weekly`;
       s.async = true;
       s.defer = true;
       document.head.appendChild(s);
