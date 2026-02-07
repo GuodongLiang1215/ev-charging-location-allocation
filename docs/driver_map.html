@@ -7,14 +7,13 @@
   <style>
     html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
     #map { height: 100%; width: 100%; }
-    /* IMPORTANT: prevent global CSS from breaking Google tiles */
     #map img { max-width: none !important; }
 
     .panel{
       position:absolute; top:12px; left:12px; z-index:5;
       background:rgba(255,255,255,0.96);
       border:1px solid #ddd; border-radius:12px;
-      padding:12px 12px; width:420px;
+      padding:12px; width:420px;
       box-shadow:0 6px 22px rgba(0,0,0,0.14);
     }
     .title{ font-size:20px; font-weight:700; margin:4px 0 10px; }
@@ -43,14 +42,6 @@
     .btn:disabled{ opacity:0.5; cursor:not-allowed; }
 
     .divider{ height:1px; background:#e5e7eb; margin:10px 0; }
-
-    .chips{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-    .chip{
-      border:1px solid #e5e7eb; padding:6px 10px; border-radius:999px;
-      font-size:12px; color:#111827; background:#f9fafb;
-      display:flex; align-items:center; gap:8px;
-    }
-    .chip strong{ font-weight:700; }
 
     .resultsHead{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:8px; }
     .resultsHead .left{ display:flex; align-items:center; gap:8px; }
@@ -107,7 +98,6 @@
   <div class="panel">
     <div class="title">Driver view (Cardiff only)</div>
 
-    <!-- Search -->
     <div class="inputRow">
       <input id="q" placeholder="Search address/place (e.g., CF10 3AT, 1 King Edward VII Ave)" />
       <button id="btnSearch">Search</button>
@@ -120,22 +110,20 @@
 
     <div class="row">
       <input id="unlock" type="checkbox" />
-      <label for="unlock" class="small"><b>Unlock map</b> (allow search & pan outside Cardiff)</label>
+      <label for="unlock" class="small"><b>Unlock map</b> (allow pan/search outside Cardiff)</label>
     </div>
 
     <div class="divider"></div>
 
-    <!-- Layers -->
     <div class="row"><input id="lyTraffic" type="checkbox" checked><label for="lyTraffic">Live traffic</label></div>
     <div class="row"><input id="lySupply" type="checkbox" checked><label for="lySupply">Existing chargers</label></div>
     <div class="row"><input id="lyLSOA" type="checkbox"><label for="lyLSOA">LSOA boundary (optional)</label></div>
 
     <div id="status" class="status"></div>
-    <div class="hint">Tip: traffic lines are clearer at zoom ≥ 12. Driver map is locked to Cardiff bounds by default.</div>
+    <div class="hint">Tip: traffic lines are clearer at zoom ≥ 12. Click on map to set origin if location is denied.</div>
 
     <div class="divider"></div>
 
-    <!-- Results -->
     <div class="resultsHead">
       <div class="left">
         <b>Best options</b> <span id="count" class="badge">0</span>
@@ -157,74 +145,46 @@
     <div class="legend">
       <b>Legend</b><br/>
       <div><span class="swatch" style="background:#2563eb;"></span><b>Blue</b>: existing chargers (bigger + thick white outline)</div>
-      <div><span class="swatch" style="background:#93c5fd;"></span><b>LSOA</b>: boundary fill (optional, off by default)</div>
+      <div><span class="swatch" style="background:#93c5fd;"></span><b>LSOA</b>: boundary fill (optional)</div>
       <div class="small" style="margin-top:6px;">
-        Note: planned sites / demand centroids are planning layers (keep them in Planner view by default).
+        Note: planned sites / demand centroids are planning layers — keep them in Planner view.
       </div>
     </div>
   </div>
 
   <script>
-    // =========================
-    // CONFIG
-    // =========================
+    // ====== PUT YOUR KEY HERE ======
     const GMAPS_KEY = "AIzaSyAUproFl8jRStUlFwOKbQ8yh2CjNJ_H2c4";
 
+    // Driver view loads only LSOA (for Cardiff bounds) + supply chargers
     const BASE = new URL("./", window.location.href);
     const DATA_URLS = {
       lsoa:   new URL("data/processed/demand_lsoa_cardiff_exact.geojson", BASE).href,
       supply: new URL("data/processed/supply_chargers_ocm.geojson", BASE).href
-      // demand/news intentionally NOT loaded in driver view (planner layers)
     };
 
-    // Cardiff bounds (fallback). We will replace with LSOA-derived bounds if loaded.
+    // fallback Cardiff bbox (used before LSOA bounds computed)
     const FALLBACK_CARDIFF = { north: 51.566, south: 51.410, east: -3.065, west: -3.335 };
 
-    // =========================
-    // MAP GLOBALS
-    // =========================
+    // map globals
     let map, info, trafficLayer, lsoaLayer;
     let supplyMarkers = [];
     let originMarker = null;
     let originLatLng = null;
-    let selectedDestination = null;
 
-    // For routing / ETA
-    let directionsService, directionsRenderer;
-    let distanceMatrixService;
+    let directionsService, directionsRenderer, distanceMatrixService;
 
-    // Cardiff restriction
     let cardiffBoundsLiteral = null;
     let cardiffBoundsObj = null;
     let lockListener = null;
 
-    // Sorting mode
     let sortMode = "eta"; // "eta" | "dist"
-    let lastResults = []; // cached results for sorting
+    let lastResults = [];
 
-    // Icons (bigger & clearer)
-    const ICON_SUPPLY_NORMAL = {
-      path: google.maps.SymbolPath.CIRCLE,
-      fillColor: "#2563eb",
-      fillOpacity: 1,
-      strokeColor: "#ffffff",
-      strokeOpacity: 1,
-      strokeWeight: 3,
-      scale: 9
-    };
-    const ICON_SUPPLY_HOVER = {
-      path: google.maps.SymbolPath.CIRCLE,
-      fillColor: "#1d4ed8",
-      fillOpacity: 1,
-      strokeColor: "#ffffff",
-      strokeOpacity: 1,
-      strokeWeight: 4,
-      scale: 11
-    };
+    // Icons (MUST be created AFTER google exists => inside initMap)
+    let ICON_SUPPLY_NORMAL = null;
+    let ICON_SUPPLY_HOVER  = null;
 
-    // =========================
-    // HELPERS
-    // =========================
     function setStatus(msg) {
       document.getElementById("status").textContent = msg || "";
     }
@@ -246,13 +206,11 @@
     }
 
     function insideCardiffLatLng(latlng){
-      if(!cardiffBoundsLiteral) return true;
-      const {north,south,east,west} = cardiffBoundsLiteral;
-      return latlng.lat() <= north && latlng.lat() >= south && latlng.lng() >= west && latlng.lng() <= east;
+      const b = cardiffBoundsLiteral || FALLBACK_CARDIFF;
+      return latlng.lat() <= b.north && latlng.lat() >= b.south && latlng.lng() >= b.west && latlng.lng() <= b.east;
     }
 
     function applyCardiffLock(on){
-      // remove old lock
       if(lockListener){
         google.maps.event.removeListener(lockListener);
         lockListener = null;
@@ -274,7 +232,6 @@
           strictBounds: true
         }
       });
-      // extra guard: if user drags, re-center inside bounds
       lockListener = map.addListener("dragend", () => {
         if(!cardiffBoundsObj.contains(map.getCenter())){
           map.fitBounds(cardiffBoundsObj);
@@ -313,13 +270,10 @@
       }
 
       if (added > 10) {
-        // store Cardiff bounds for restriction + search
         const ne = bounds.getNorthEast();
         const sw = bounds.getSouthWest();
         cardiffBoundsLiteral = { north: ne.lat(), south: sw.lat(), east: ne.lng(), west: sw.lng() };
         cardiffBoundsObj = bounds;
-
-        // fit to Cardiff
         map.fitBounds(bounds);
         return true;
       }
@@ -387,7 +341,7 @@
           optimized: true
         });
 
-        // hover: enlarge + tooltip
+        // hover: larger + clear tooltip
         m.addListener("mouseover", () => {
           m.setIcon(ICON_SUPPLY_HOVER);
           m.setZIndex(google.maps.Marker.MAX_ZINDEX + 1);
@@ -400,10 +354,9 @@
           info.close();
         });
 
-        // click: set destination for routing
+        // click: set destination and hint to recommend
         m.addListener("click", () => {
-          selectedDestination = m.getPosition();
-          info.setContent(`<b>${escapeHtml(name)}</b><br/>Destination selected.<br/>Click “Recommend” to compare ETAs.`);
+          info.setContent(`<b>${escapeHtml(name)}</b><br/>Destination highlighted.<br/>Click “Recommend” to compare ETAs.`);
           info.open(map, m);
         });
 
@@ -443,8 +396,6 @@
         `;
 
         div.addEventListener("click", () => {
-          // draw route preview
-          selectedDestination = it.latlng;
           drawRoute(originLatLng, it.latlng, it.name);
         });
 
@@ -453,11 +404,8 @@
     }
 
     function setSortButtons(){
-      const etaBtn = document.getElementById("sortEta");
-      const distBtn = document.getElementById("sortDist");
-
-      etaBtn.classList.toggle("active", sortMode === "eta");
-      distBtn.classList.toggle("active", sortMode === "dist");
+      document.getElementById("sortEta").classList.toggle("active", sortMode === "eta");
+      document.getElementById("sortDist").classList.toggle("active", sortMode === "dist");
     }
 
     function applySortAndRender(){
@@ -471,7 +419,6 @@
       }else{
         items.sort((a,b) => a.distanceValue - b.distanceValue);
       }
-      // re-label rank
       items.forEach((x,i) => x.rankLabel = `#${i+1}`);
       renderResults(items);
     }
@@ -489,10 +436,14 @@
         setStatus("Please set an origin first (Search / Use my location / click on map).");
         return;
       }
+      if(!supplyMarkers.length){
+        setStatus("No charger points loaded.");
+        return;
+      }
+
       setStatus("Computing Top 5 by ETA (traffic)…");
 
-      // Candidate chargers: take nearest by straight-line (fast prefilter)
-      // then compute travel time using Distance Matrix with traffic.
+      // prefilter by straight-line distance (fast)
       const candidates = supplyMarkers
         .map(m => {
           const p = m.getPosition();
@@ -500,14 +451,10 @@
           return { marker: m, latlng: p, name: m.getTitle() || "Charger", approxDist: d };
         })
         .sort((a,b) => a.approxDist - b.approxDist)
-        .slice(0, 25); // prefilter size (tune)
-
-      if(!candidates.length){
-        setStatus("No charger points loaded.");
-        return;
-      }
+        .slice(0, 25);
 
       const destinations = candidates.map(c => c.latlng);
+
       const request = {
         origins: [originLatLng],
         destinations,
@@ -519,7 +466,6 @@
         unitSystem: google.maps.UnitSystem.METRIC
       };
 
-      // Distance Matrix API
       const res = await new Promise((resolve, reject) => {
         distanceMatrixService.getDistanceMatrix(request, (r, status) => {
           if(status !== "OK" || !r) return reject(new Error("DistanceMatrix failed: " + status));
@@ -534,10 +480,10 @@
         const e = el[i];
         if(!e || e.status !== "OK") continue;
 
-        const distVal = e.distance?.value ?? Infinity; // meters
+        const distVal = e.distance?.value ?? Infinity;
         const distText = e.distance?.text ?? "(n/a)";
 
-        const durVal = e.duration?.value ?? Infinity; // seconds (normal)
+        const durVal = e.duration?.value ?? Infinity;
         const durText = e.duration?.text ?? "(n/a)";
 
         const trafVal = e.duration_in_traffic?.value ?? durVal;
@@ -556,13 +502,12 @@
           trafficValue: trafVal,
           trafficText: trafText,
           delayText,
-          rankLabel: "" // filled after sort
+          rankLabel: ""
         });
       }
 
-      // sort + take top 5 by traffic
       items.sort((a,b) => a.trafficValue - b.trafficValue);
-      const top5 = items.slice(0,5);
+      const top5 = items.slice(0, 5);
       top5.forEach((x,i) => x.rankLabel = `#${i+1}`);
 
       lastResults = top5;
@@ -592,14 +537,11 @@
         const leg = result.routes[0].legs[0];
         const durTraffic = leg.duration_in_traffic ? leg.duration_in_traffic.text : "(n/a)";
         const durNormal  = leg.duration ? leg.duration.text : "(n/a)";
-        // best-effort delay
         setStatus(`Route preview → ${destName || "destination"}\nETA (traffic): ${durTraffic}\nNormal: ${durNormal}\nDistance: ${leg.distance?.text || "(n/a)"}`);
       });
     }
 
-    // =========================
-    // SEARCH (SMART geocode)
-    // =========================
+    // ===== SEARCH: no need to type "Cardiff" manually =====
     async function geocodeRequest(query, useBoundsBias){
       const b = cardiffBoundsLiteral || FALLBACK_CARDIFF;
       const boundsParam = `${b.south},${b.west}|${b.north},${b.east}`;
@@ -609,9 +551,7 @@
       params.set("key", GMAPS_KEY);
       params.set("region", "uk");
       params.set("components", "country:GB");
-      if(useBoundsBias){
-        params.set("bounds", boundsParam);
-      }
+      if(useBoundsBias) params.set("bounds", boundsParam);
 
       const url = `https://maps.googleapis.com/maps/api/geocode/json?${params.toString()}`;
       const res = await fetch(url);
@@ -624,7 +564,7 @@
     }
 
     async function geocodeSmart(query){
-      // 1) no bounds first
+      // 1) normal geocode first
       let results = await geocodeRequest(query, false);
       for(const r of results){
         const loc = r.geometry.location;
@@ -634,7 +574,7 @@
         }
       }
 
-      // 2) bounds bias
+      // 2) Cardiff bounds bias
       results = await geocodeRequest(query, true);
       for(const r of results){
         const loc = r.geometry.location;
@@ -644,7 +584,7 @@
         }
       }
 
-      // 3) if unlock, accept first
+      // 3) if unlocked, accept first result even outside
       const unlock = document.getElementById("unlock").checked;
       if(unlock && results.length){
         const loc = results[0].geometry.location;
@@ -655,10 +595,28 @@
       throw new Error("No matching result inside Cardiff. Enable “Unlock map” to search outside Cardiff.");
     }
 
-    // =========================
-    // INIT MAP
-    // =========================
+    // ===== initMap: ONLY place we touch google.* at top-level =====
     async function initMap(){
+      // create icons AFTER google is ready
+      ICON_SUPPLY_NORMAL = {
+        path: google.maps.SymbolPath.CIRCLE,
+        fillColor: "#2563eb",
+        fillOpacity: 1,
+        strokeColor: "#ffffff",
+        strokeOpacity: 1,
+        strokeWeight: 3,
+        scale: 9
+      };
+      ICON_SUPPLY_HOVER = {
+        path: google.maps.SymbolPath.CIRCLE,
+        fillColor: "#1d4ed8",
+        fillOpacity: 1,
+        strokeColor: "#ffffff",
+        strokeOpacity: 1,
+        strokeWeight: 4,
+        scale: 11
+      };
+
       map = new google.maps.Map(document.getElementById("map"), {
         center: { lat: 51.4816, lng: -3.1791 },
         zoom: 12,
@@ -669,11 +627,9 @@
 
       info = new google.maps.InfoWindow();
 
-      // Traffic
       trafficLayer = new google.maps.TrafficLayer();
       trafficLayer.setMap(map);
 
-      // LSOA layer (optional, off by default)
       lsoaLayer = new google.maps.Data();
       lsoaLayer.setStyle({
         fillColor: "#93c5fd",
@@ -682,20 +638,17 @@
         strokeOpacity: 0.75,
         strokeWeight: 1
       });
-      lsoaLayer.setMap(null); // default off in driver view
+      lsoaLayer.setMap(null); // off by default in driver view
 
-      // Services
       directionsService  = new google.maps.DirectionsService();
       directionsRenderer = new google.maps.DirectionsRenderer({ map, suppressMarkers: true });
       distanceMatrixService = new google.maps.DistanceMatrixService();
 
-      // UI events
       initLayersUI();
 
-      // Default lock ON
+      // default: lock on
       applyCardiffLock(true);
 
-      // Load data (LSOA bounds + chargers)
       try{
         setStatus("Loading data…");
 
@@ -704,11 +657,10 @@
           loadGeoJSON(DATA_URLS.supply)
         ]);
 
-        // LSOA
         lsoaLayer.addGeoJson(lsoa);
+
         const ok = fitBoundsFromGeoJSONPolygon(lsoa);
         if(!ok){
-          // fallback bounds
           cardiffBoundsLiteral = {...FALLBACK_CARDIFF};
           cardiffBoundsObj = new google.maps.LatLngBounds(
             new google.maps.LatLng(FALLBACK_CARDIFF.south, FALLBACK_CARDIFF.west),
@@ -717,10 +669,8 @@
           map.fitBounds(cardiffBoundsObj);
         }
 
-        // Apply lock using derived bounds
         applyCardiffLock(!document.getElementById("unlock").checked);
 
-        // Chargers (no cluster)
         supplyMarkers = makeSupplyMarkers(supply);
 
         setStatus(`Loaded.\nExisting chargers: ${(supply.features||[]).length}\n\nSet origin then Recommend.`);
@@ -730,7 +680,7 @@
         alert(String(err));
       }
 
-      // Click map to set origin (fallback if geolocation denied)
+      // click map to set origin (fallback)
       map.addListener("click", (e) => {
         const unlock = document.getElementById("unlock").checked;
         if(!unlock && !insideCardiffLatLng(e.latLng)){
@@ -740,18 +690,13 @@
         setOrigin(e.latLng, "Origin (clicked)");
       });
 
-      // Unlock toggle
+      // unlock toggle
       document.getElementById("unlock").addEventListener("change", (e) => {
-        const on = !e.target.checked; // checked => unlock => no restriction
-        applyCardiffLock(on);
-        if(!e.target.checked){
-          setStatus("Map unlocked: you can pan/search outside Cardiff.");
-        }else{
-          setStatus("Map locked to Cardiff bounds.");
-        }
+        applyCardiffLock(!e.target.checked);
+        setStatus(e.target.checked ? "Map unlocked." : "Map locked to Cardiff bounds.");
       });
 
-      // Search button
+      // search
       document.getElementById("btnSearch").addEventListener("click", async () => {
         const q = (document.getElementById("q").value || "").trim();
         if(!q){
@@ -778,21 +723,20 @@
         }
       });
 
-      // Enter to search
       document.getElementById("q").addEventListener("keydown", (e) => {
         if(e.key === "Enter") document.getElementById("btnSearch").click();
       });
 
-      // My location
+      // my location
       document.getElementById("btnMyLoc").addEventListener("click", () => {
         setStatus("Getting your location…");
         navigator.geolocation.getCurrentPosition(
           (pos) => {
             const ll = new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude);
-
             const unlock = document.getElementById("unlock").checked;
+
             if(!unlock && !insideCardiffLatLng(ll)){
-              setStatus("Your location is outside Cardiff. Enable Unlock to use it here.");
+              setStatus("Your location is outside Cardiff. Enable Unlock to use it.");
               return;
             }
 
@@ -809,7 +753,7 @@
         );
       });
 
-      // Recommend
+      // recommend
       document.getElementById("btnRecommend").addEventListener("click", async () => {
         try{
           await recommendTop5();
@@ -820,7 +764,7 @@
         }
       });
 
-      // Sorting
+      // sorting
       document.getElementById("sortEta").addEventListener("click", () => {
         sortMode = "eta";
         setSortButtons();
@@ -836,8 +780,7 @@
 
     window.initMap = initMap;
 
-    // Load Google Maps JS
-    // NOTE: We include geometry for straight-line prefilter distance.
+    // Load Maps JS (geometry needed)
     (function loadGoogleMaps(){
       const s = document.createElement("script");
       s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GMAPS_KEY)}&callback=initMap&v=weekly&libraries=geometry`;
