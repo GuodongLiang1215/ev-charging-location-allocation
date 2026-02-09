@@ -2,11 +2,224 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta http-equiv="refresh" content="0; url=driver_map.html" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Redirecting…</title>
+  <title>Cardiff EV Charging – Maps</title>
+  <style>
+    :root{
+      --bg: #0b1220;
+      --card: rgba(255,255,255,0.08);
+      --card2: rgba(255,255,255,0.06);
+      --border: rgba(255,255,255,0.12);
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --btn: #111827;
+      --btnText: #ffffff;
+      --btn2: rgba(255,255,255,0.10);
+      --shadow: 0 18px 60px rgba(0,0,0,0.35);
+    }
+
+    html, body{
+      height: 100%;
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background: radial-gradient(1200px 800px at 20% 10%, rgba(59,130,246,0.22), transparent 60%),
+                  radial-gradient(900px 700px at 90% 30%, rgba(124,58,237,0.18), transparent 55%),
+                  var(--bg);
+      color: var(--text);
+    }
+
+    .wrap{
+      min-height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 28px 16px;
+    }
+
+    .panel{
+      width: min(860px, 100%);
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, var(--card), var(--card2));
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      padding: 22px 22px;
+      backdrop-filter: blur(8px);
+    }
+
+    .top{
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    h1{
+      margin: 0;
+      font-size: 22px;
+      letter-spacing: 0.2px;
+    }
+    .sub{
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+      max-width: 580px;
+    }
+
+    .badges{
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .badge{
+      font-size: 12px;
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.06);
+    }
+
+    .grid{
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .card{
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: rgba(255,255,255,0.06);
+      padding: 16px 16px;
+      transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
+    }
+    .card:hover{
+      transform: translateY(-2px);
+      background: rgba(255,255,255,0.08);
+      border-color: rgba(255,255,255,0.18);
+    }
+
+    .card h2{
+      margin: 0 0 8px;
+      font-size: 16px;
+      letter-spacing: 0.2px;
+    }
+    .card p{
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .btnRow{
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .btn{
+      appearance: none;
+      border: 0;
+      border-radius: 12px;
+      padding: 10px 12px;
+      cursor: pointer;
+      font-weight: 800;
+      font-size: 13px;
+      color: var(--btnText);
+      background: var(--btn);
+      transition: transform 120ms ease, opacity 120ms ease;
+    }
+    .btn:hover{ transform: translateY(-1px); }
+    .btn.secondary{
+      background: var(--btn2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-weight: 700;
+    }
+    a.btn{
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .footer{
+      margin-top: 14px;
+      font-size: 12px;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .footer code{
+      color: #cbd5e1;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--border);
+      padding: 2px 6px;
+      border-radius: 8px;
+    }
+
+    @media (max-width: 720px){
+      .grid{ grid-template-columns: 1fr; }
+      .panel{ padding: 18px 16px; }
+    }
+  </style>
 </head>
+
 <body>
-  Redirecting to <a href="driver_map.html">driver_map.html</a>…
+  <div class="wrap">
+    <div class="panel">
+      <div class="top">
+        <div>
+          <h1>Cardiff EV Charging – Map Portal</h1>
+          <div class="sub">
+            Choose a view. Driver focuses on traffic-aware ETA ranking and navigation.
+            Planner focuses on demand/gap analysis and scenario planning (Top P).
+          </div>
+        </div>
+
+        <div class="badges">
+          <span class="badge">Cardiff only</span>
+          <span class="badge">Google Maps</span>
+          <span class="badge">GeoJSON</span>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h2>Driver View</h2>
+          <p>
+            Search / use my location → recommend Top 5 chargers ranked by traffic-aware ETA.
+            Designed for day-to-day driving decisions.
+          </p>
+          <div class="btnRow">
+            <a class="btn" href="driver_map.html">Open Driver Map</a>
+            <a class="btn secondary" href="driver_map.html#help">Help</a>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Planner View</h2>
+          <p>
+            Needs & gap dashboard, equity-first gap map, candidate scoring and scenario planning
+            (add P new sites + export shortlist).
+          </p>
+          <div class="btnRow">
+            <a class="btn" href="planner_map.html">Open Planner Map</a>
+            <a class="btn secondary" href="planner_map.html#help">Help</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer">
+        <div>Tip: If maps don’t load, check your API key referrer restrictions.</div>
+        <div>Files under <code>docs/</code> are served by GitHub Pages.</div>
+      </div>
+    </div>
+  </div>
 </body>
 </html>
