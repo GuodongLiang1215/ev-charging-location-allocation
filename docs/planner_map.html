@@ -64,6 +64,13 @@
     .status{ margin-top:8px; font-size:12px; color:#111827; white-space:pre-wrap; }
     .legend{ margin-top:10px; font-size:12px; line-height:1.35; }
     .swatch{ display:inline-block; width:12px; height:12px; border-radius:999px; margin-right:8px; border:2px solid rgba(255,255,255,0.9); box-shadow:0 0 0 1px rgba(0,0,0,0.12); }
+
+    /* scoring bars */
+    .barRow{ display:flex; align-items:center; gap:10px; margin-top:6px; }
+    .barTrack{ flex:1; height:10px; border-radius:999px; background:#eef2ff; overflow:hidden; border:1px solid #e5e7eb; }
+    .barFill{ height:100%; }
+    .tiny{ font-size:11px; color:#6b7280; }
+    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
   </style>
 </head>
 
@@ -110,10 +117,56 @@
     </div>
 
     <div class="muted">
-      Scoring (transparent): Score = 0.6*Demand + 0.4*Equity − 0.2*Penalty.<br/>
+      Scoring (transparent): Score = wd·Demand + we·Equity − wp·Penalty.<br/>
       Demand: uses <code>population</code> (joined) if present.<br/>
       Equity: uses (priority) <code>equity/on_street/imd</code>; otherwise uses <code>median_age</code> as a proxy.
     </div>
+  </div>
+
+  <!-- Scoring tab panel (P3) -->
+  <div class="section" id="scorePanel" style="display:none;">
+    <div style="font-weight:900; margin-bottom:6px;">Scoring breakdown (P3)</div>
+    <div class="muted" id="scoreFormula"></div>
+
+    <div class="row" style="margin-top:10px;">
+      <label class="small" style="min-width:105px;">Demand weight</label>
+      <input id="wDemand" type="range" min="0" max="1" step="0.01" value="0.60" style="flex:1;">
+      <span class="badge" id="wDemandVal">0.60</span>
+    </div>
+
+    <div class="row">
+      <label class="small" style="min-width:105px;">Equity weight</label>
+      <input id="wEquity" type="range" min="0" max="1" step="0.01" value="0.40" style="flex:1;">
+      <span class="badge" id="wEquityVal">0.40</span>
+    </div>
+
+    <div class="row">
+      <label class="small" style="min-width:105px;">Penalty weight</label>
+      <input id="wPenalty" type="range" min="0" max="1" step="0.01" value="0.20" style="flex:1;">
+      <span class="badge" id="wPenaltyVal">0.20</span>
+    </div>
+
+    <div class="muted" style="margin-top:6px;">
+      Notes:
+      <ul style="margin:6px 0 0 18px; padding:0;">
+        <li>Demand/Equity/Penalty are normalized to 0–1 before weighting.</li>
+        <li>We normalize Demand+Equity to sum to 1 (more interpretable); Penalty is independent.</li>
+      </ul>
+    </div>
+
+    <div class="kpis" style="margin-top:10px;">
+      <div class="card"><div class="h">Avg Demand (Top P)</div><div class="v" id="k_davg">–</div></div>
+      <div class="card"><div class="h">Avg Equity (Top P)</div><div class="v" id="k_eavg">–</div></div>
+      <div class="card"><div class="h">Avg Penalty (Top P)</div><div class="v" id="k_pavg">–</div></div>
+      <div class="card"><div class="h">Avg Score (Top P)</div><div class="v" id="k_savg">–</div></div>
+    </div>
+
+    <div class="row" style="justify-content:space-between; margin-top:10px;">
+      <div style="font-weight:900;">Top P score decomposition</div>
+      <span class="badge" id="scoreCountBadge">0</span>
+    </div>
+
+    <div class="list" id="scoreList"></div>
   </div>
 
   <div class="section">
@@ -147,7 +200,6 @@
 </div>
 
 <script>
-  // ====== PUT YOUR KEY HERE (you already did) ======
   const GMAPS_KEY = "AIzaSyAUproFl8jRStUlFwOKbQ8yh2CjNJ_H2c4";
 
   const BASE = new URL("./", window.location.href);
@@ -159,34 +211,28 @@
   };
 
   const CARDIFF_BOUNDS = { north: 51.566, south: 51.410, east: -3.065, west: -3.333 };
-
-  // Roadmap targets (edit if needed)
   const TARGET_BY_YEAR = { "2026": 700, "2030": 1500, "2035": 2000 };
 
-  // Fields
   const FIELD = {
-    // LSOA
     code:   ["LSOA21CD","lsoa21cd","LSOA11CD","lsoa11cd","code","id"],
     pop:    ["population","pop","pop_total","Pop","total_pop","Total"],
     median_age: ["median_age","median age","Median age mid-2024","Median age mid-2023","Median age mid-2022"],
     demand: ["demand","demand_score","ev_owners","owners","weight"],
     equity: ["equity","equity_score","on_street","no_offstreet","imd","deprivation"],
-    // supply
     sockets:["sockets","SocketCount","socket_count","connectors","num_sockets","units"],
     name:   ["name","operator","location","Site","address","Address"]
   };
 
-  // Weights
+  // fallback weights (sliders override)
   const W = { demand: 0.60, equity: 0.40, penalty: 0.20 };
 
   let map, info;
   let supplyLayer, lsoaLayer, candLayer, selectedLayer, solutionLayer;
 
-  // caches
-  let lsoaIndex = [];   // [{code, demandRaw, equityRaw, medianAge, polygons:[Polygon], feature}]
-  let supplyPts = [];   // [{lat,lng,sockets}]
-  let candPts = [];     // [{lat,lng,name, demandRaw,equityRaw, penaltyRaw, score, lsoaCode, pop, medianAge}]
-  let selected = [];    // top P
+  let lsoaIndex = [];
+  let supplyPts = [];
+  let candPts = [];
+  let selected = [];
   let activeTab = "kpi";
 
   function setStatus(msg){ document.getElementById("status").textContent = msg || ""; }
@@ -204,13 +250,10 @@
     return fb;
   }
 
-  // Detect if coords look like EPSG:27700 (meters)
   function looksLike27700(lng, lat){
-    // OSGB eastings/northings are ~[250k..350k], [150k..250k] for Cardiff-ish
     return Math.abs(lng) > 1000 || Math.abs(lat) > 1000;
   }
 
-  // --- symbols ---
   function iconCircle(fill, scale, strokeW=3){
     return { path: google.maps.SymbolPath.CIRCLE, fillColor:fill, fillOpacity:1,
       strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:strokeW, scale };
@@ -224,13 +267,161 @@
       strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:1, scale:6 };
   }
 
-  // --- tabs & choropleth ---
+  // ===== scoring UI helpers =====
+  function setScorePanelVisible(){
+    const el = document.getElementById("scorePanel");
+    if(!el) return;
+    el.style.display = (activeTab === "score") ? "block" : "none";
+  }
+
+  function getWeights(){
+    const wdEl = document.getElementById("wDemand");
+    const weEl = document.getElementById("wEquity");
+    const wpEl = document.getElementById("wPenalty");
+
+    let wd = wdEl ? num(wdEl.value, W.demand) : W.demand;
+    let we = weEl ? num(weEl.value, W.equity) : W.equity;
+    let wp = wpEl ? num(wpEl.value, W.penalty) : W.penalty;
+
+    // normalize demand+equity to 1 (interpretability)
+    const sumDE = wd + we;
+    if(sumDE > 0){
+      wd = wd / sumDE;
+      we = we / sumDE;
+    } else {
+      wd = 0.5; we = 0.5;
+    }
+    return { wd, we, wp };
+  }
+
+  function updateWeightUI(){
+    const { wd, we, wp } = getWeights();
+    const wdVal = document.getElementById("wDemandVal");
+    const weVal = document.getElementById("wEquityVal");
+    const wpVal = document.getElementById("wPenaltyVal");
+    if(wdVal) wdVal.textContent = wd.toFixed(2);
+    if(weVal) weVal.textContent = we.toFixed(2);
+    if(wpVal) wpVal.textContent = wp.toFixed(2);
+
+    const formula = document.getElementById("scoreFormula");
+    if(formula){
+      formula.innerHTML =
+        `<span class="mono">Score = ${wd.toFixed(2)}·Demand + ${we.toFixed(2)}·Equity − ${wp.toFixed(2)}·Penalty</span>`;
+    }
+  }
+
+  function renderScoreTab(){
+    const scoreList = document.getElementById("scoreList");
+    const badge = document.getElementById("scoreCountBadge");
+    if(!scoreList || !badge) return;
+
+    if(!selected || selected.length === 0){
+      badge.textContent = "0";
+      scoreList.innerHTML =
+        `<div class="item">
+          <div class="itemTitle">No shortlist yet</div>
+          <div class="muted">Click <b>Run scenario</b> first, then come back to Scoring tab and adjust sliders.</div>
+        </div>`;
+      document.getElementById("k_davg").textContent = "–";
+      document.getElementById("k_eavg").textContent = "–";
+      document.getElementById("k_pavg").textContent = "–";
+      document.getElementById("k_savg").textContent = "–";
+      return;
+    }
+
+    badge.textContent = String(selected.length);
+
+    const avg = (arr)=> arr.reduce((a,b)=>a+b,0)/Math.max(1,arr.length);
+    const davg = avg(selected.map(x=>num(x.d01,0)));
+    const eavg = avg(selected.map(x=>num(x.e01,0)));
+    const pavg = avg(selected.map(x=>num(x.p01,0)));
+    const savg = avg(selected.map(x=>num(x.score,0)));
+
+    document.getElementById("k_davg").textContent = (davg*100).toFixed(0);
+    document.getElementById("k_eavg").textContent = (eavg*100).toFixed(0);
+    document.getElementById("k_pavg").textContent = (pavg*100).toFixed(0);
+    document.getElementById("k_savg").textContent = savg.toFixed(3);
+
+    scoreList.innerHTML = "";
+    selected.forEach((c, idx)=>{
+      const div = document.createElement("div");
+      div.className = "item";
+
+      const title = document.createElement("div");
+      title.className = "itemTitle";
+      title.textContent = `${idx+1}. ${c.name || "Candidate"} (score=${c.score.toFixed(3)})`;
+
+      const meta = document.createElement("div");
+      meta.className = "itemMeta";
+      meta.innerHTML = `
+        <span class="badge">D01 ${(c.d01*100).toFixed(0)}</span>
+        <span class="badge">E01 ${(c.e01*100).toFixed(0)}</span>
+        <span class="badge">P01 ${(c.p01*100).toFixed(0)}</span>
+        <span class="badge">LSOA ${escapeHtml(c.lsoaCode || "n/a")}</span>
+      `;
+
+      const clampPct = (x)=> Math.max(0, Math.min(100, x*100));
+      const bars1 = document.createElement("div");
+      bars1.className = "barRow";
+      bars1.innerHTML = `
+        <span class="tiny" style="width:55px;">Demand</span>
+        <div class="barTrack"><div class="barFill" style="width:${clampPct(c.contribDemand)}%; background:#2563eb;"></div></div>
+        <span class="tiny mono" style="width:66px; text-align:right;">+${c.contribDemand.toFixed(3)}</span>
+      `;
+      const bars2 = document.createElement("div");
+      bars2.className = "barRow";
+      bars2.innerHTML = `
+        <span class="tiny" style="width:55px;">Equity</span>
+        <div class="barTrack"><div class="barFill" style="width:${clampPct(c.contribEquity)}%; background:#10b981;"></div></div>
+        <span class="tiny mono" style="width:66px; text-align:right;">+${c.contribEquity.toFixed(3)}</span>
+      `;
+      const bars3 = document.createElement("div");
+      bars3.className = "barRow";
+      bars3.innerHTML = `
+        <span class="tiny" style="width:55px;">Penalty</span>
+        <div class="barTrack"><div class="barFill" style="width:${clampPct(c.contribPenalty)}%; background:#6b7280;"></div></div>
+        <span class="tiny mono" style="width:66px; text-align:right;">−${c.contribPenalty.toFixed(3)}</span>
+      `;
+
+      div.appendChild(title);
+      div.appendChild(meta);
+      div.appendChild(bars1);
+      div.appendChild(bars2);
+      div.appendChild(bars3);
+
+      div.addEventListener("click", ()=>{
+        map.panTo({lat:c.lat, lng:c.lng});
+        map.setZoom(Math.max(map.getZoom(), 14));
+        info.setContent(
+          `<b>${escapeHtml(c.name||"Selected")}</b><br/>` +
+          `Score: ${escapeHtml(c.score.toFixed(3))}<br/>` +
+          `Demand: ${(c.d01*100).toFixed(0)} | Equity: ${(c.e01*100).toFixed(0)} | Penalty: ${(c.p01*100).toFixed(0)}<br/>` +
+          `Contrib: +${c.contribDemand.toFixed(3)} +${c.contribEquity.toFixed(3)} −${c.contribPenalty.toFixed(3)}<br/>` +
+          `LSOA: ${escapeHtml(c.lsoaCode||"n/a")}`
+        );
+        info.setPosition({lat:c.lat, lng:c.lng});
+        info.open({map});
+      });
+
+      scoreList.appendChild(div);
+    });
+  }
+
+  // ===== tabs & choropleth =====
   function setTab(tab){
     activeTab = tab;
     document.getElementById("tabKpi").classList.toggle("active", tab==="kpi");
     document.getElementById("tabGap").classList.toggle("active", tab==="gap");
     document.getElementById("tabScore").classList.toggle("active", tab==="score");
+
+    setScorePanelVisible();
     styleLSOA();
+
+    // When switching to score tab, refresh the content (if scenario already run)
+    if(activeTab === "score"){
+      updateWeightUI();
+      renderScoreTab();
+    }
   }
 
   function styleLSOA(){
@@ -251,7 +442,6 @@
         };
       });
     } else {
-      // Default boundary: clearer (you complained about not seeing it)
       lsoaLayer.setStyle({
         fillColor: "#93c5fd",
         fillOpacity: 0.18,
@@ -262,7 +452,7 @@
     }
   }
 
-  // --- build polygon index from raw GeoJSON (Polygon + MultiPolygon, supports holes) ---
+  // geometry helpers
   function makePolygonsFromGeometry(geom){
     const polys = [];
     if(!geom) return polys;
@@ -309,54 +499,6 @@
       if(containsAny(rec.polygons, latLng)) return rec;
     }
     return null;
-  }
-
-  function runScenario(){
-    const P = Math.max(1, Math.floor(num(document.getElementById("pSel").value, 10)));
-    const year = String(document.getElementById("yearSel").value || "2030");
-    const target = num(TARGET_BY_YEAR[year], 1500);
-
-    const supplyTotal = computeSupplyTotal();
-    const gap = Math.max(0, target - supplyTotal);
-
-    document.getElementById("k_supply").textContent = String(Math.round(supplyTotal));
-    document.getElementById("k_target").textContent = String(Math.round(target));
-    document.getElementById("k_gap").textContent = String(Math.round(gap));
-
-    if(!candPts.length){
-      setStatus("No candidates loaded. Check demand_points_cardiff_exact_pop_wgs84.geojson path.");
-      return;
-    }
-
-    const dN = normalize01(candPts.map(c=>c.demandRaw));
-    const eN = normalize01(candPts.map(c=>c.equityRaw));
-    const pN = normalize01(candPts.map(c=>c.penaltyRaw));
-
-    for(const c of candPts){
-      c.d01 = dN.norm(num(c.demandRaw, 0));
-      c.e01 = eN.norm(num(c.equityRaw, 0));
-      c.p01 = pN.norm(num(c.penaltyRaw, 0));
-      c.score = W.demand*c.d01 + W.equity*c.e01 - W.penalty*c.p01;
-    }
-
-    candPts.sort((a,b)=> b.score - a.score);
-    selected = candPts.slice(0, P);
-
-    updateSelectedLayer();
-    renderList();
-
-    document.getElementById("k_selected").textContent = String(selected.length);
-    document.getElementById("btnExportCsv").disabled = selected.length===0;
-    document.getElementById("btnExportGeo").disabled = selected.length===0;
-
-    computeLSOAGapScores();
-    styleLSOA();
-
-    setStatus(
-      `Scenario done.\nYear=${year}, target=${Math.round(target)}, supply=${Math.round(supplyTotal)}, gap=${Math.round(gap)}.\n` +
-      `Candidates=${candPts.length}, selected Top ${selected.length}.\n` +
-      `Switch to "Gap map" tab for underserved areas.`
-    );
   }
 
   function computeLSOAGapScores(){
@@ -522,16 +664,73 @@
     downloadText("planner_shortlist.geojson", JSON.stringify(fc, null, 2));
   }
 
+  function runScenario(){
+    const P = Math.max(1, Math.floor(num(document.getElementById("pSel").value, 10)));
+    const year = String(document.getElementById("yearSel").value || "2030");
+    const target = num(TARGET_BY_YEAR[year], 1500);
+
+    const supplyTotal = computeSupplyTotal();
+    const gap = Math.max(0, target - supplyTotal);
+
+    document.getElementById("k_supply").textContent = String(Math.round(supplyTotal));
+    document.getElementById("k_target").textContent = String(Math.round(target));
+    document.getElementById("k_gap").textContent = String(Math.round(gap));
+
+    if(!candPts.length){
+      setStatus("No candidates loaded. Check demand_points_cardiff_exact_pop_wgs84.geojson path.");
+      return;
+    }
+
+    // normalize features
+    const dN = normalize01(candPts.map(c=>c.demandRaw));
+    const eN = normalize01(candPts.map(c=>c.equityRaw));
+    const pN = normalize01(candPts.map(c=>c.penaltyRaw));
+
+    // weights (from sliders)
+    const { wd, we, wp } = getWeights();
+
+    for(const c of candPts){
+      c.d01 = dN.norm(num(c.demandRaw, 0));
+      c.e01 = eN.norm(num(c.equityRaw, 0));
+      c.p01 = pN.norm(num(c.penaltyRaw, 0));
+
+      c.score = wd*c.d01 + we*c.e01 - wp*c.p01;
+      c.contribDemand = wd*c.d01;
+      c.contribEquity = we*c.e01;
+      c.contribPenalty = wp*c.p01;
+    }
+
+    candPts.sort((a,b)=> b.score - a.score);
+    selected = candPts.slice(0, P);
+
+    updateSelectedLayer();
+    renderList();
+
+    document.getElementById("k_selected").textContent = String(selected.length);
+    document.getElementById("btnExportCsv").disabled = selected.length===0;
+    document.getElementById("btnExportGeo").disabled = selected.length===0;
+
+    computeLSOAGapScores();
+    styleLSOA();
+
+    updateWeightUI();
+    if(activeTab === "score") renderScoreTab();
+
+    setStatus(
+      `Scenario done.\nYear=${year}, target=${Math.round(target)}, supply=${Math.round(supplyTotal)}, gap=${Math.round(gap)}.\n` +
+      `Candidates=${candPts.length}, selected Top ${selected.length}.\n` +
+      `Switch to "Gap map" tab for underserved areas.`
+    );
+  }
+
   async function initMap(){
     map = new google.maps.Map(document.getElementById("map"), {
       center:{lat:51.4816,lng:-3.1791},
       zoom:12,
-      mapTypeControl:false, streetViewControl:false, fullscreenControl:true,
-      restriction:{latLngBounds: CARDIFF_BOUNDS, strictBounds:true}
+      mapTypeControl:false, streetViewControl:false, fullscreenControl:true
     });
     info = new google.maps.InfoWindow();
 
-    // layers
     supplyLayer   = new google.maps.Data({map});
     lsoaLayer     = new google.maps.Data({map});
     candLayer     = new google.maps.Data({map});
@@ -543,8 +742,9 @@
     selectedLayer.setStyle(()=>({ icon: iconStar("#ef4444"), zIndex: 9999 }));
     solutionLayer.setStyle(()=>({ icon: iconTriangle("#7c3aed"), zIndex: 850 }));
 
-    // Make LSOA visible immediately
     styleLSOA();
+    setScorePanelVisible();
+    updateWeightUI();
 
     // UI toggles
     document.getElementById("ckSupply").addEventListener("change",(e)=> supplyLayer.setMap(e.target.checked? map:null));
@@ -562,6 +762,21 @@
     document.getElementById("btnExportGeo").addEventListener("click", exportGeoJSON);
     document.getElementById("btnPrint").addEventListener("click", ()=>window.print());
 
+    // sliders -> auto re-run scenario + refresh scoring
+    function hookSlider(id){
+      const el = document.getElementById(id);
+      if(!el) return;
+      el.addEventListener("input", ()=>{
+        updateWeightUI();
+        if(Array.isArray(candPts) && candPts.length > 0){
+          runScenario();
+        }
+      });
+    }
+    hookSlider("wDemand");
+    hookSlider("wEquity");
+    hookSlider("wPenalty");
+
     try{
       setStatus("Loading GeoJSON…");
 
@@ -571,16 +786,6 @@
         loadGeoJSON(DATA_URLS.candidates),
         loadGeoJSON(DATA_URLS.solution).catch(()=>null)
       ]);
-
-      // quick sanity: check candidate coords are WGS84
-      let badCandidateCount = 0;
-      for(const f of (candidates.features||[])){
-        if(!f.geometry || f.geometry.type!=="Point") continue;
-        const [lng, lat] = f.geometry.coordinates || [];
-        if(typeof lat==="number" && typeof lng==="number" && looksLike27700(lng, lat)){
-          badCandidateCount++;
-        }
-      }
 
       // draw layers
       supplyLayer.addGeoJson(supply);
@@ -594,10 +799,8 @@
         const code = getProp(props, FIELD.code, "LSOA");
         const pop  = num(getProp(props, FIELD.pop, null), NaN);
 
-        // Demand: population first, fallback to demand-like field, else 1
         const demandRaw = Number.isFinite(pop) ? pop : num(getProp(props, FIELD.demand, 1), 1);
 
-        // Equity: try equity/on_street/imd first, else use median_age as proxy
         let equityVal = getProp(props, FIELD.equity, null);
         const medAge = num(getProp(props, FIELD.median_age, null), NaN);
         if(equityVal === null || equityVal === undefined || equityVal === ""){
@@ -634,7 +837,7 @@
         if(!f.geometry || f.geometry.type!=="Point") continue;
         const [lng, lat] = f.geometry.coordinates || [];
         if(typeof lat!=="number" || typeof lng!=="number") continue;
-        if(looksLike27700(lng, lat)) continue; // avoid weird supply points
+        if(looksLike27700(lng, lat)) continue;
         const props = f.properties || {};
         const sockets = num(getProp(props, FIELD.sockets, 0), 0);
         supplyPts.push({lat,lng,sockets: sockets || 1});
@@ -642,17 +845,11 @@
 
       // candidate cache + join
       candPts = [];
-      let usedCandidates = 0, skippedCandidates = 0;
       for(const f of (candidates.features||[])){
         if(!f.geometry || f.geometry.type!=="Point") continue;
         const [lng, lat] = f.geometry.coordinates || [];
         if(typeof lat!=="number" || typeof lng!=="number") continue;
-
-        if(looksLike27700(lng, lat)){
-          // This means you accidentally loaded a 27700 file
-          skippedCandidates++;
-          continue;
-        }
+        if(looksLike27700(lng, lat)) continue;
 
         const props = f.properties || {};
         const name = getProp(props, ["name","id","site","label","LSOA21NM","LSOA11NM"], "Demand centroid");
@@ -665,9 +862,8 @@
         const pop = rec ? num(rec.pop, NaN) : NaN;
         const medianAge = rec ? num(rec.medianAge, NaN) : NaN;
 
-        const penaltyRaw = 0; // placeholder
+        const penaltyRaw = 0;
         candPts.push({lat,lng,name, demandRaw, equityRaw, penaltyRaw, lsoaCode: rec? rec.code : "", pop, medianAge});
-        usedCandidates++;
       }
 
       // initial KPI
@@ -679,22 +875,13 @@
 
       map.fitBounds(CARDIFF_BOUNDS);
 
-      let warn = "";
-      if(badCandidateCount > 0){
-        warn += `\n[WARN] Some candidate coords look like EPSG:27700. Ensure you are using *_wgs84.geojson.`;
-      }
-      if(skippedCandidates > 0){
-        warn += `\n[WARN] Skipped ${skippedCandidates} candidate points that looked like EPSG:27700.`;
-      }
-
       setStatus(
         `Loaded.\n` +
         `Supply points: ${supplyPts.length}\n` +
         `LSOA polygons: ${(lsoa.features||[]).length}\n` +
-        `Candidates (used): ${usedCandidates}\n` +
-        `Solution overlay (p10): ${(solution && solution.features)? solution.features.length : 0}\n` +
-        `${warn}\n\n` +
-        `Next: Run scenario (Top P) → export shortlist.`
+        `Candidates: ${candPts.length}\n` +
+        `Solution overlay (p10): ${(solution && solution.features)? solution.features.length : 0}\n\n` +
+        `Next: Run scenario (Top P) → then go to Scoring tab.`
       );
 
     } catch(err){
