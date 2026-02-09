@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Cardiff EV Charging – Planner View</title>
+  <style>
+    html, body { height:100%; margin:0; font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    #map { height:100%; width:100%; }
+    #map img { max-width:none !important; }
+
+    .panel{
+      position:absolute; top:12px; left:12px; z-index:5;
+      background:rgba(255,255,255,0.96);
+      border:1px solid #ddd; border-radius:14px;
+      padding:12px; width:480px;
+      box-shadow:0 4px 18px rgba(0,0,0,0.12);
+      max-height: calc(100vh - 24px);
+      overflow:auto;
+    }
+    .title{ font-weight:900; font-size:20px; margin:0 0 10px; }
+    .row{ display:flex; align-items:center; gap:10px; margin:8px 0; flex-wrap:wrap; }
+    .small{ color:#374151; font-size:12px; }
+    .muted{ color:#6b7280; font-size:12px; }
+    .btn{
+      background:#111827; color:#fff; border:none; border-radius:10px;
+      padding:10px 12px; cursor:pointer; font-size:13px; font-weight:900;
+    }
+    .btn.secondary{ background:#6b7280; }
+    .btn:disabled{ opacity:0.5; cursor:not-allowed; }
+
+    .input, select{
+      border:1px solid #e5e7eb; border-radius:10px;
+      padding:10px 12px; outline:none; font-size:13px; background:#fff;
+    }
+
+    .kpis{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:8px; }
+    .card{ border:1px solid #eee; border-radius:12px; padding:10px 12px; background:#fff; }
+    .card .h{ font-size:12px; color:#6b7280; margin-bottom:6px; }
+    .card .v{ font-size:18px; font-weight:900; color:#111827; }
+
+    .section{ margin-top:10px; padding-top:10px; border-top:1px solid #eee; }
+    .pill{
+      display:inline-flex; align-items:center;
+      border:1px solid #e5e7eb; border-radius:999px;
+      padding:6px 10px; font-size:12px; background:#fff;
+      cursor:pointer;
+    }
+    .pill.active{ background:#111827; color:#fff; border-color:#111827; }
+
+    .list{ margin-top:8px; max-height:240px; overflow:auto; border:1px solid #eee; border-radius:12px; background:#fff; }
+    .item{ padding:10px 12px; border-bottom:1px solid #f1f5f9; cursor:pointer; }
+    .item:hover{ background:#f8fafc; }
+    .item:last-child{ border-bottom:none; }
+    .itemTitle{ font-weight:900; font-size:13px; margin-bottom:4px; }
+    .itemMeta{ font-size:12px; color:#374151; display:flex; gap:10px; flex-wrap:wrap; }
+    .badge{
+      display:inline-flex; align-items:center;
+      padding:2px 8px; border-radius:999px;
+      border:1px solid #e5e7eb; font-size:12px; color:#111827;
+      background:#fff;
+    }
+
+    .status{ margin-top:8px; font-size:12px; color:#111827; white-space:pre-wrap; }
+    .legend{ margin-top:10px; font-size:12px; line-height:1.35; }
+    .swatch{ display:inline-block; width:12px; height:12px; border-radius:999px; margin-right:8px; border:2px solid rgba(255,255,255,0.9); box-shadow:0 0 0 1px rgba(0,0,0,0.12); }
+  </style>
+</head>
+
+<body>
+<div id="map"></div>
+
+<div class="panel">
+  <div class="title">Planner view (Cardiff)</div>
+  <div class="muted">Uses your existing files: supply + LSOA + demand centroids as candidates + optional p10 solution overlay.</div>
+
+  <div class="section">
+    <div style="font-weight:900; margin-bottom:6px;">Scenario (P sites) + scoring (P3/P4)</div>
+    <div class="row">
+      <label class="small">Target year</label>
+      <select id="yearSel">
+        <option value="2026">2026</option>
+        <option value="2030" selected>2030</option>
+        <option value="2035">2035</option>
+      </select>
+
+      <label class="small">Add P</label>
+      <input id="pSel" class="input" style="width:90px" type="number" min="1" value="10"/>
+      <button id="btnRun" class="btn">Run scenario</button>
+    </div>
+
+    <div class="row">
+      <span class="pill active" id="tabKpi">KPIs</span>
+      <span class="pill" id="tabGap">Gap map</span>
+      <span class="pill" id="tabScore">Scoring</span>
+    </div>
+
+    <div class="row">
+      <label class="small"><input id="ckSupply" type="checkbox" checked> Existing chargers</label>
+      <label class="small"><input id="ckLSOA" type="checkbox" checked> LSOA boundary</label>
+      <label class="small"><input id="ckCandidates" type="checkbox" checked> Candidates (demand points)</label>
+      <label class="small"><input id="ckSelected" type="checkbox" checked> Selected (Top P)</label>
+      <label class="small"><input id="ckSolution" type="checkbox" checked> Show your p10 solution</label>
+    </div>
+
+    <div class="row">
+      <button id="btnExportCsv" class="btn secondary" disabled>Export shortlist (CSV)</button>
+      <button id="btnExportGeo" class="btn secondary" disabled>Export shortlist (GeoJSON)</button>
+      <button id="btnPrint" class="btn secondary">Print</button>
+    </div>
+
+    <div class="muted">
+      Default scoring (transparent): Score = 0.6*Demand + 0.4*Equity − 0.2*Penalty.
+      <br/>Demand will use <code>population/pop</code> if present in LSOA; otherwise falls back to any <code>demand</code>-like field or 1.
+    </div>
+  </div>
+
+  <div class="section">
+    <div style="font-weight:900; margin-bottom:6px;">Needs & gap dashboard (P1)</div>
+    <div class="kpis">
+      <div class="card"><div class="h">Current supply (sockets or points)</div><div class="v" id="k_supply">–</div></div>
+      <div class="card"><div class="h">Target sockets (year)</div><div class="v" id="k_target">–</div></div>
+      <div class="card"><div class="h">Gap (target - supply)</div><div class="v" id="k_gap">–</div></div>
+      <div class="card"><div class="h">Selected sites (Top P)</div><div class="v" id="k_selected">0</div></div>
+    </div>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="section">
+    <div class="row" style="justify-content:space-between;">
+      <div style="font-weight:900;">Shortlist (Top P)</div>
+      <span class="badge" id="countBadge">0</span>
+    </div>
+    <div class="muted" id="emptyHint">Run scenario to generate shortlist.</div>
+    <div class="list" id="resultList" style="display:none;"></div>
+  </div>
+
+  <div class="legend">
+    <b>Legend</b><br/>
+    <div><span class="swatch" style="background:#2563eb;"></span>Blue dots: existing chargers</div>
+    <div><span class="swatch" style="background:#f59e0b;"></span>Orange dots: candidate demand centroids (placeholder candidates)</div>
+    <div><span class="swatch" style="background:#ef4444;"></span>Red stars: selected (Top P)</div>
+    <div><span class="swatch" style="background:#7c3aed;"></span>Purple triangles: your existing new_sites_p10 (overlay)</div>
+    <div class="muted" style="margin-top:6px;">Gap map colors LSOA by high demand + low provision (P2).</div>
+  </div>
+</div>
+
+<script>
+  // ====== PUT YOUR KEY HERE ======
+  const GMAPS_KEY = "AIzaSyAUproFl8jRStUlFwOKbQ8yh2CjNJ_H2c4";
+
+  const BASE = new URL("./", window.location.href);
+  const DATA_URLS = {
+    supply:     new URL("data/processed/supply_chargers_ocm.geojson", BASE).href,
+    // ✅ use population-enriched files you generated
+    lsoa:       new URL("data/processed/demand_lsoa_cardiff_exact_pop.geojson", BASE).href,
+    candidates: new URL("data/processed/demand_points_cardiff_exact_pop.geojson", BASE).href,
+    solution:   new URL("data/processed/new_sites_p10.geojson", BASE).href
+  };
+
+
+  const CARDIFF_BOUNDS = { north: 51.566, south: 51.410, east: -3.065, west: -3.333 };
+
+  // Roadmap target (edit to match your evidence precisely)
+  const TARGET_BY_YEAR = { "2026": 700, "2030": 1500, "2035": 2000 };
+
+  // Try these fields (you can add more)
+  const FIELD = {
+  // LSOA (your geojson uses 2021 codes)
+    code:   ["LSOA21CD","lsoa21cd","LSOA11CD","lsoa11cd","code","id"],
+    pop:    ["population","pop","pop_total","Pop","total_pop","Total"],
+    demand: ["demand","demand_score","ev_owners","owners","weight"],
+    equity: ["equity","equity_score","on_street","no_offstreet","imd","deprivation"],
+    // supply
+    sockets:["sockets","SocketCount","socket_count","connectors","num_sockets","units"],
+    name:   ["name","operator","location","Site","address","Address"]
+  };
+
+
+  // Transparent scoring weights (P3)
+  const W = { demand: 0.60, equity: 0.40, penalty: 0.20 };
+
+  let map, info;
+  let supplyLayer, lsoaLayer, candLayer, selectedLayer, solutionLayer;
+
+  // caches
+  let lsoaIndex = [];       // [{code, demandRaw, equityRaw, polygons:[google.maps.Polygon], feature}]
+  let supplyPts = [];       // [{lat,lng,sockets}]
+  let candPts = [];         // [{lat,lng,name, demandRaw,equityRaw, penaltyRaw, score, ...}]
+  let selected = [];        // top P
+
+  let activeTab = "kpi";
+
+  function setStatus(msg){ document.getElementById("status").textContent = msg || ""; }
+  function escapeHtml(s){
+    return String(s||"").replace(/[&<>"']/g,(c)=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+  }
+  async function loadGeoJSON(url){
+    const res = await fetch(url,{cache:"no-store"});
+    if(!res.ok) throw new Error(`Fetch failed: ${res.status} ${url}`);
+    return await res.json();
+  }
+  function num(x, fb=0){ const v=Number(x); return Number.isFinite(v)? v: fb; }
+  function getProp(props, keys, fb=null){
+    for(const k of keys){ if(props && props[k] !== undefined && props[k] !== null && props[k] !== "") return props[k]; }
+    return fb;
+  }
+
+  // --- symbols ---
+  function iconCircle(fill, scale, strokeW=3){
+    return { path: google.maps.SymbolPath.CIRCLE, fillColor:fill, fillOpacity:1,
+      strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:strokeW, scale };
+  }
+  function iconStar(fill){
+    return { path:"M 0,-10 L 2,-3 L 10,-3 L 4,1 L 6,9 L 0,4 L -6,9 L -4,1 L -10,-3 L -2,-3 Z",
+      fillColor:fill, fillOpacity:0.95, strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:1, scale:1 };
+  }
+  function iconTriangle(fill){
+    return { path: google.maps.SymbolPath.BACKWARD_CLOSED_ARROW, fillColor:fill, fillOpacity:0.95,
+      strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:1, scale:6 };
+  }
+
+  // --- tab & choropleth ---
+  function setTab(tab){
+    activeTab = tab;
+    document.getElementById("tabKpi").classList.toggle("active", tab==="kpi");
+    document.getElementById("tabGap").classList.toggle("active", tab==="gap");
+    document.getElementById("tabScore").classList.toggle("active", tab==="score");
+    styleLSOA();
+  }
+  function styleLSOA(){
+    if(activeTab === "gap"){
+      lsoaLayer.setStyle((ft)=>{
+        const s = num(ft.getProperty("_gapScore"), 0);
+        let fill = "#10b981";
+        if(s > 0.66) fill = "#f87171";
+        else if(s > 0.33) fill = "#f59e0b";
+        return { fillColor:fill, fillOpacity:0.35, strokeColor:"#111827", strokeOpacity:0.25, strokeWeight:1 };
+      });
+    } else {
+      lsoaLayer.setStyle({ fillColor:"#93c5fd", fillOpacity:0.08, strokeColor:"#2563eb", strokeOpacity:0.45, strokeWeight:1.5 });
+    }
+  }
+
+  // --- build polygon index from raw GeoJSON (Polygon + MultiPolygon, supports holes) ---
+  function makePolygonsFromGeometry(geom){
+    const polys = [];
+    if(!geom) return polys;
+
+    const toPath = (ring) => ring.map(([lng,lat]) => ({lat, lng}));
+    const buildPoly = (rings) => {
+      // rings: [outer, hole1, hole2...]
+      const paths = rings.map(toPath);
+      return new google.maps.Polygon({ paths });
+    };
+
+    if(geom.type === "Polygon"){
+      polys.push(buildPoly(geom.coordinates));
+    } else if(geom.type === "MultiPolygon"){
+      for(const poly of geom.coordinates){
+        polys.push(buildPoly(poly));
+      }
+    }
+    return polys;
+  }
+
+  function containsAny(polys, latLng){
+    for(const p of polys){
+      if(google.maps.geometry.poly.containsLocation(latLng, p)) return true;
+    }
+    return false;
+  }
+
+  // --- normalization ---
+  function normalize01(arr){
+    let mn=Infinity, mx=-Infinity;
+    for(const v of arr){ if(!Number.isFinite(v)) continue; mn=Math.min(mn,v); mx=Math.max(mx,v); }
+    if(!Number.isFinite(mn) || !Number.isFinite(mx) || mn===mx) return { norm: (_)=>0.5 };
+    return { norm: (x)=> (x-mn)/(mx-mn) };
+  }
+
+  function computeSupplyTotal(){
+    let sum = 0;
+    for(const p of supplyPts) sum += num(p.sockets, 0);
+    if(sum === 0 && supplyPts.length) sum = supplyPts.length; // fallback
+    return sum;
+  }
+
+  function joinPointToLSOA(latLng){
+    // return the first matching LSOA record
+    for(const rec of lsoaIndex){
+      if(containsAny(rec.polygons, latLng)) return rec;
+    }
+    return null;
+  }
+
+  function runScenario(){
+    const P = Math.max(1, Math.floor(num(document.getElementById("pSel").value, 10)));
+    const year = String(document.getElementById("yearSel").value || "2030");
+    const target = num(TARGET_BY_YEAR[year], 1500);
+
+    const supplyTotal = computeSupplyTotal();
+    const gap = Math.max(0, target - supplyTotal);
+
+    document.getElementById("k_supply").textContent = String(Math.round(supplyTotal));
+    document.getElementById("k_target").textContent = String(Math.round(target));
+    document.getElementById("k_gap").textContent = String(Math.round(gap));
+
+    if(!candPts.length){
+      setStatus("No candidates loaded. Check demand_points_cardiff_exact.geojson path.");
+      return;
+    }
+
+    // normalize candidate demand/equity/penalty
+    const dN = normalize01(candPts.map(c=>c.demandRaw));
+    const eN = normalize01(candPts.map(c=>c.equityRaw));
+    const pN = normalize01(candPts.map(c=>c.penaltyRaw));
+
+    for(const c of candPts){
+      c.d01 = dN.norm(num(c.demandRaw, 0));
+      c.e01 = eN.norm(num(c.equityRaw, 0));
+      c.p01 = pN.norm(num(c.penaltyRaw, 0));
+      c.score = W.demand*c.d01 + W.equity*c.e01 - W.penalty*c.p01;
+    }
+
+    candPts.sort((a,b)=> b.score - a.score);
+    selected = candPts.slice(0, P);
+
+    updateSelectedLayer();
+    renderList();
+    document.getElementById("k_selected").textContent = String(selected.length);
+    document.getElementById("btnExportCsv").disabled = selected.length===0;
+    document.getElementById("btnExportGeo").disabled = selected.length===0;
+
+    // compute LSOA gap score (P1/P2): high demand + low provision
+    computeLSOAGapScores();
+    styleLSOA();
+
+    setStatus(
+      `Scenario done.\nYear=${year}, target=${Math.round(target)}, supply=${Math.round(supplyTotal)}, gap=${Math.round(gap)}.\n` +
+      `Candidates=${candPts.length}, selected Top ${selected.length}.\n` +
+      `Switch to "Gap map" tab for underserved areas.`
+    );
+  }
+
+  function computeLSOAGapScores(){
+    // First: allocate supply to LSOA by point-in-polygon
+    const supplyByLSOA = new Map(); // code -> sockets
+    for(const s of supplyPts){
+      const ll = new google.maps.LatLng(s.lat, s.lng);
+      const rec = joinPointToLSOA(ll);
+      if(!rec) continue;
+      const prev = supplyByLSOA.get(rec.code) || 0;
+      supplyByLSOA.set(rec.code, prev + num(s.sockets, 1));
+    }
+
+    const demandArr = [];
+    const supplyArr = [];
+
+    for(const rec of lsoaIndex){
+      const sup = supplyByLSOA.get(rec.code) || 0;
+      rec.supplyRaw = sup;
+      demandArr.push(num(rec.demandRaw, 0));
+      supplyArr.push(num(rec.supplyRaw, 0));
+    }
+
+    const nd = normalize01(demandArr);
+    const ns = normalize01(supplyArr);
+
+    // gapScore = demandNorm - 0.7*supplyNorm (clamped 0..1)
+    for(const rec of lsoaIndex){
+      const d01 = nd.norm(num(rec.demandRaw, 0));
+      const s01 = ns.norm(num(rec.supplyRaw, 0));
+      const g = Math.max(0, Math.min(1, d01 - 0.7*s01));
+      rec.feature.setProperty("_gapScore", g);
+    }
+  }
+
+  function updateSelectedLayer(){
+    selectedLayer.forEach(ft=> selectedLayer.remove(ft));
+    const fc = {
+      type:"FeatureCollection",
+      features: selected.map((c, i)=>({
+        type:"Feature",
+        geometry:{ type:"Point", coordinates:[c.lng, c.lat] },
+        properties:{
+          rank:i+1, name:c.name||"Selected", score:c.score,
+          demand01:c.d01, equity01:c.e01, penalty01:c.p01
+        }
+      }))
+    };
+    selectedLayer.addGeoJson(fc);
+  }
+
+  function renderList(){
+    const list = document.getElementById("resultList");
+    const empty = document.getElementById("emptyHint");
+    const badge = document.getElementById("countBadge");
+    badge.textContent = String(selected.length);
+
+    if(!selected.length){
+      list.style.display="none";
+      empty.style.display="block";
+      return;
+    }
+    empty.style.display="none";
+    list.style.display="block";
+    list.innerHTML="";
+
+    selected.forEach((c, idx)=>{
+      const div = document.createElement("div");
+      div.className="item";
+
+      const t = document.createElement("div");
+      t.className="itemTitle";
+      t.textContent = `${idx+1}. ${c.name || "Candidate"}`;
+
+      const m = document.createElement("div");
+      m.className="itemMeta";
+      m.innerHTML = `
+        <span class="badge">Score: ${escapeHtml(c.score.toFixed(3))}</span>
+        <span class="badge">Demand: ${(c.d01*100).toFixed(0)}</span>
+        <span class="badge">Equity: ${(c.e01*100).toFixed(0)}</span>
+        <span class="badge">Penalty: ${(c.p01*100).toFixed(0)}</span>
+        <span class="badge">LSOA: ${escapeHtml(c.lsoaCode || "n/a")}</span>
+      `;
+
+      div.appendChild(t);
+      div.appendChild(m);
+
+      div.addEventListener("click", ()=>{
+        map.panTo({lat:c.lat, lng:c.lng});
+        map.setZoom(Math.max(map.getZoom(), 14));
+        info.setContent(
+          `<b>${escapeHtml(c.name||"Selected")}</b><br/>` +
+          `Score: ${escapeHtml(c.score.toFixed(3))}<br/>` +
+          `Demand: ${(c.d01*100).toFixed(0)} | Equity: ${(c.e01*100).toFixed(0)} | Penalty: ${(c.p01*100).toFixed(0)}<br/>` +
+          `LSOA: ${escapeHtml(c.lsoaCode||"n/a")}`
+        );
+        info.setPosition({lat:c.lat, lng:c.lng});
+        info.open({map});
+      });
+
+      list.appendChild(div);
+    });
+  }
+
+  function downloadText(filename, text){
+    const blob = new Blob([text], {type:"text/plain;charset=utf-8"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href=url; a.download=filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 800);
+  }
+
+  function exportCSV(){
+    const rows = [["rank","name","lat","lng","score","demand01","equity01","penalty01","lsoa"]];
+    selected.forEach((c,i)=>{
+      rows.push([i+1, (c.name||"").replaceAll('"','""'), c.lat, c.lng, c.score.toFixed(6), c.d01.toFixed(6), c.e01.toFixed(6), c.p01.toFixed(6), c.lsoaCode||""]);
+    });
+    const csv = rows.map(r=> r.map(x=> `"${x}"`).join(",")).join("\n");
+    downloadText("planner_shortlist.csv", csv);
+  }
+
+  function exportGeoJSON(){
+    const fc = {
+      type:"FeatureCollection",
+      features: selected.map((c,i)=>({
+        type:"Feature",
+        geometry:{type:"Point", coordinates:[c.lng,c.lat]},
+        properties:{ rank:i+1, name:c.name||"", score:+c.score.toFixed(6), demand01:+c.d01.toFixed(6), equity01:+c.e01.toFixed(6), penalty01:+c.p01.toFixed(6), lsoa:c.lsoaCode||"" }
+      }))
+    };
+    downloadText("planner_shortlist.geojson", JSON.stringify(fc, null, 2));
+  }
+
+  async function initMap(){
+    map = new google.maps.Map(document.getElementById("map"), {
+      center:{lat:51.4816,lng:-3.1791},
+      zoom:12,
+      mapTypeControl:false, streetViewControl:false, fullscreenControl:true,
+      restriction:{latLngBounds: CARDIFF_BOUNDS, strictBounds:true}
+    });
+    info = new google.maps.InfoWindow();
+
+    // layers
+    supplyLayer   = new google.maps.Data({map});
+    lsoaLayer     = new google.maps.Data({map});
+    candLayer     = new google.maps.Data({map});
+    selectedLayer = new google.maps.Data({map});
+    solutionLayer = new google.maps.Data({map});
+
+    supplyLayer.setStyle(()=>({ icon: iconCircle("#2563eb", 7, 3), zIndex: 800 }));
+    candLayer.setStyle(()=>({ icon: iconCircle("#f59e0b", 6, 2), zIndex: 700 }));
+    selectedLayer.setStyle(()=>({ icon: iconStar("#ef4444"), zIndex: 9999 }));
+    solutionLayer.setStyle(()=>({ icon: iconTriangle("#7c3aed"), zIndex: 850 }));
+
+    styleLSOA();
+
+    // UI
+    document.getElementById("ckSupply").addEventListener("change",(e)=> supplyLayer.setMap(e.target.checked? map:null));
+    document.getElementById("ckLSOA").addEventListener("change",(e)=> lsoaLayer.setMap(e.target.checked? map:null));
+    document.getElementById("ckCandidates").addEventListener("change",(e)=> candLayer.setMap(e.target.checked? map:null));
+    document.getElementById("ckSelected").addEventListener("change",(e)=> selectedLayer.setMap(e.target.checked? map:null));
+    document.getElementById("ckSolution").addEventListener("change",(e)=> solutionLayer.setMap(e.target.checked? map:null));
+
+    document.getElementById("tabKpi").addEventListener("click",()=>setTab("kpi"));
+    document.getElementById("tabGap").addEventListener("click",()=>setTab("gap"));
+    document.getElementById("tabScore").addEventListener("click",()=>setTab("score"));
+
+    document.getElementById("btnRun").addEventListener("click", runScenario);
+    document.getElementById("btnExportCsv").addEventListener("click", exportCSV);
+    document.getElementById("btnExportGeo").addEventListener("click", exportGeoJSON);
+    document.getElementById("btnPrint").addEventListener("click", ()=>window.print());
+
+    // load data
+    try{
+      setStatus("Loading GeoJSON…");
+
+      const [supply, lsoa, candidates, solution] = await Promise.all([
+        loadGeoJSON(DATA_URLS.supply),
+        loadGeoJSON(DATA_URLS.lsoa),
+        loadGeoJSON(DATA_URLS.candidates),
+        loadGeoJSON(DATA_URLS.solution).catch(()=>null)
+      ]);
+
+      // draw layers
+      supplyLayer.addGeoJson(supply);
+      lsoaLayer.addGeoJson(lsoa);
+      candLayer.addGeoJson(candidates);
+      if(solution) solutionLayer.addGeoJson(solution);
+
+      // build LSOA index from raw GeoJSON (for joins)
+      lsoaIndex = (lsoa.features||[]).map((f)=>{
+        const props = f.properties || {};
+        const code = getProp(props, FIELD.code, "LSOA");
+        const pop  = num(getProp(props, FIELD.pop, null), NaN);
+        const dem  = Number.isFinite(pop) ? pop : num(getProp(props, FIELD.demand, 1), 1);
+        const eq   = num(getProp(props, FIELD.equity, 0), 0);
+        const polygons = makePolygonsFromGeometry(f.geometry);
+        const medAge = num(getProp(props, ["median_age","median age","Median age mid-2024"], null), NaN);
+        return { code, demandRaw: dem, equityRaw: eq, medianAge: medAge, polygons, feature: null };
+
+      });
+
+      // map Data layer features back to lsoaIndex by code (so we can set _gapScore later)
+      const lsoaByCode = new Map(lsoaIndex.map(r=>[r.code, r]));
+        lsoaLayer.forEach((ft)=>{
+        const propsLike = {
+            LSOA21CD: ft.getProperty("LSOA21CD"),
+            lsoa21cd: ft.getProperty("lsoa21cd"),
+            LSOA11CD: ft.getProperty("LSOA11CD"),
+            lsoa11cd: ft.getProperty("lsoa11cd"),
+            code: ft.getProperty("code"),
+            id: ft.getProperty("id"),
+        };
+        const code = getProp(propsLike, FIELD.code, null);
+
+        if(code && lsoaByCode.has(code)){
+            const rec = lsoaByCode.get(code);
+            rec.feature = ft;
+            ft.setProperty("code", rec.code); // keep a consistent field for UI
+        }
+    });
+
+
+      // supply cache
+      supplyPts = [];
+      for(const f of (supply.features||[])){
+        if(!f.geometry || f.geometry.type!=="Point") continue;
+        const [lng, lat] = f.geometry.coordinates || [];
+        if(typeof lat!=="number" || typeof lng!=="number") continue;
+        const props = f.properties || {};
+        const sockets = num(getProp(props, FIELD.sockets, 0), 0);
+        supplyPts.push({lat,lng,sockets: sockets || 1});
+      }
+
+      // candidates cache (from demand points) + join to LSOA to get demand/equity
+      candPts = [];
+      for(const f of (candidates.features||[])){
+        if(!f.geometry || f.geometry.type!=="Point") continue;
+        const [lng, lat] = f.geometry.coordinates || [];
+        if(typeof lat!=="number" || typeof lng!=="number") continue;
+        const props = f.properties || {};
+        const name = getProp(props, ["name","id","site","label"], "Demand centroid");
+        const ll = new google.maps.LatLng(lat, lng);
+
+        const rec = joinPointToLSOA(ll);
+        const demandRaw = rec ? num(rec.demandRaw, 1) : 1;
+        const equityRaw = rec ? num(rec.equityRaw, 0) : 0;
+
+        // penalty placeholder (future: grid constraint, parking feasibility, delivery risk)
+        const penaltyRaw = 0;
+
+        candPts.push({lat,lng,name, demandRaw, equityRaw, penaltyRaw, lsoaCode: rec? rec.code : ""});
+      }
+
+      // initial KPI
+      const year = String(document.getElementById("yearSel").value || "2030");
+      const supplyTotal = computeSupplyTotal();
+      document.getElementById("k_supply").textContent = String(Math.round(supplyTotal));
+      document.getElementById("k_target").textContent = String(Math.round(num(TARGET_BY_YEAR[year], 1500)));
+      document.getElementById("k_gap").textContent = "–";
+
+      map.fitBounds(CARDIFF_BOUNDS);
+
+      setStatus(
+        `Loaded.\n` +
+        `Supply points: ${supplyPts.length}\n` +
+        `LSOA polygons: ${(lsoa.features||[]).length}\n` +
+        `Candidates (demand points): ${candPts.length}\n` +
+        `Solution overlay (p10): ${(solution && solution.features)? solution.features.length : 0}\n\n` +
+        `Next: Run scenario (Top P) → export shortlist.`
+      );
+
+    } catch(err){
+      console.error(err);
+      setStatus("FAILED.\n" + String(err));
+      alert(String(err));
+    }
+  }
+
+  window.initMap = initMap;
+
+  (function loadGoogleMaps(){
+    const s = document.createElement("script");
+    // IMPORTANT: libraries=geometry for point-in-polygon
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GMAPS_KEY)}&callback=initMap&v=weekly&libraries=geometry`;
+    s.async = true; s.defer = true;
+    document.head.appendChild(s);
+  })();
+</script>
+</body>
+</html>
