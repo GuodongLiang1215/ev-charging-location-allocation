@@ -207,13 +207,13 @@
 
   const BASE = new URL("./", window.location.href);
   const DATA_URLS = {
-    supply:     new URL("docs/data/processed/supply_chargers_ocm.geojson", BASE).href,
+    supply:     new URL("data/processed/supply_chargers_ocm.geojson", BASE).href,
     // IMPORTANT: now use ENRICHED LSOA
     // If your file is under docs/data/processed/ instead of data/processed/,
     // change to: new URL("docs/data/processed/demand_lsoa_cardiff_exact_pop_wgs84_enriched.geojson", BASE).href
     lsoa:       new URL("docs/data/processed/demand_lsoa_cardiff_exact_pop_wgs84_enriched.geojson", BASE).href,
-    candidates: new URL("docs/data/processed/demand_points_cardiff_exact_pop_wgs84.geojson", BASE).href,
-    solution:   new URL("docs/data/processed/new_sites_p10.geojson", BASE).href
+    candidates: new URL("data/processed/demand_points_cardiff_exact_pop_wgs84.geojson", BASE).href,
+    solution:   new URL("data/processed/new_sites_p10.geojson", BASE).href
   };
 
   const CARDIFF_BOUNDS = { north: 51.566, south: 51.410, east: -3.065, west: -3.333 };
