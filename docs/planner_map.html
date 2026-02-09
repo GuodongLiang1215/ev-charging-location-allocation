@@ -79,7 +79,9 @@
 
 <div class="panel">
   <div class="title">Planner view (Cardiff)</div>
-  <div class="muted">Uses: supply + LSOA (with population/median age) + demand centroids as candidates + optional p10 overlay.</div>
+  <div class="muted">
+    Uses: supply + LSOA (enriched with WIMD + census proxies) + demand centroids as candidates + optional p10 overlay.
+  </div>
 
   <div class="section">
     <div style="font-weight:900; margin-bottom:6px;">Scenario (P sites) + scoring (P3/P4)</div>
@@ -117,13 +119,14 @@
     </div>
 
     <div class="muted">
-      Scoring (transparent): Score = wd·Demand + we·Equity − wp·Penalty.<br/>
-      Demand: uses <code>population</code> (joined) if present.<br/>
-      Equity: uses (priority) <code>equity/on_street/imd</code>; otherwise uses <code>median_age</code> as a proxy.
+      Scoring (transparent): <span class="mono">Score = wd·Demand + we·Equity − wp·Penalty</span><br/>
+      Demand: uses <code>population</code> if present; else fallback to other demand-like fields.<br/>
+      Equity (new): uses <code>equity_proxy</code> / <code>wimd_norm</code> first, then old fields.<br/>
+      Penalty (new): uses <code>parking_constraint</code> (0–1) from census proxies (higher = more constrained).
     </div>
   </div>
 
-  <!-- Scoring tab panel (P3) -->
+  <!-- Scoring tab panel -->
   <div class="section" id="scorePanel" style="display:none;">
     <div style="font-weight:900; margin-bottom:6px;">Scoring breakdown (P3)</div>
     <div class="muted" id="scoreFormula"></div>
@@ -204,21 +207,45 @@
 
   const BASE = new URL("./", window.location.href);
   const DATA_URLS = {
-    supply:     new URL("data/processed/supply_chargers_ocm.geojson", BASE).href,
-    lsoa:       new URL("data/processed/demand_lsoa_cardiff_exact_pop_wgs84.geojson", BASE).href,
-    candidates: new URL("data/processed/demand_points_cardiff_exact_pop_wgs84.geojson", BASE).href,
-    solution:   new URL("data/processed/new_sites_p10.geojson", BASE).href
+    supply:     new URL("docs/data/processed/supply_chargers_ocm.geojson", BASE).href,
+    // IMPORTANT: now use ENRICHED LSOA
+    // If your file is under docs/data/processed/ instead of data/processed/,
+    // change to: new URL("docs/data/processed/demand_lsoa_cardiff_exact_pop_wgs84_enriched.geojson", BASE).href
+    lsoa:       new URL("docs/data/processed/demand_lsoa_cardiff_exact_pop_wgs84_enriched.geojson", BASE).href,
+    candidates: new URL("docs/data/processed/demand_points_cardiff_exact_pop_wgs84.geojson", BASE).href,
+    solution:   new URL("docs/data/processed/new_sites_p10.geojson", BASE).href
   };
 
   const CARDIFF_BOUNDS = { north: 51.566, south: 51.410, east: -3.065, west: -3.333 };
   const TARGET_BY_YEAR = { "2026": 700, "2030": 1500, "2035": 2000 };
 
+  // Field detection (LSOA enriched now has more fields)
   const FIELD = {
-    code:   ["LSOA21CD","lsoa21cd","LSOA11CD","lsoa11cd","code","id"],
+    // keys
+    code:   ["LSOA21CD","lsoa21cd","LSOA11CD","lsoa11cd","code","id","_lsoa_code"],
+    // demand
     pop:    ["population","pop","pop_total","Pop","total_pop","Total"],
-    median_age: ["median_age","median age","Median age mid-2024","Median age mid-2023","Median age mid-2022"],
     demand: ["demand","demand_score","ev_owners","owners","weight"],
-    equity: ["equity","equity_score","on_street","no_offstreet","imd","deprivation"],
+    median_age: ["median_age","median age","Median age mid-2024","Median age mid-2023","Median age mid-2022"],
+
+    // equity (new priority)
+    equity: [
+      "equity_proxy","wimd_norm","wimd_score","imd","deprivation","equity","equity_score","on_street","no_offstreet",
+      "share_rented","share_dense_housing"
+    ],
+
+    // penalty (new priority)
+    penalty: ["parking_constraint","share_dense_housing","share_flats","share_terraced"],
+
+    // extra useful fields (optional display)
+    share_flats: ["share_flats"],
+    share_dense: ["share_dense_housing"],
+    share_rented:["share_rented"],
+    share_no_car:["share_no_car"],
+    wimd_rank:   ["wimd_rank"],
+    wimd_decile: ["wimd_decile"],
+
+    // supply
     sockets:["sockets","SocketCount","socket_count","connectors","num_sockets","units"],
     name:   ["name","operator","location","Site","address","Address"]
   };
@@ -229,10 +256,11 @@
   let map, info;
   let supplyLayer, lsoaLayer, candLayer, selectedLayer, solutionLayer;
 
-  let lsoaIndex = [];
-  let supplyPts = [];
-  let candPts = [];
-  let selected = [];
+  // caches
+  let lsoaIndex = [];   // [{code, demandRaw, equityRaw, penaltyRaw, props..., polygons, feature}]
+  let supplyPts = [];   // [{lat,lng,sockets}]
+  let candPts = [];     // [{lat,lng,name, demandRaw,equityRaw,penaltyRaw, extras..., score, lsoaCode}]
+  let selected = [];    // top P
   let activeTab = "kpi";
 
   function setStatus(msg){ document.getElementById("status").textContent = msg || ""; }
@@ -246,14 +274,18 @@
   }
   function num(x, fb=0){ const v=Number(x); return Number.isFinite(v)? v: fb; }
   function getProp(props, keys, fb=null){
-    for(const k of keys){ if(props && props[k] !== undefined && props[k] !== null && props[k] !== "") return props[k]; }
+    for(const k of keys){
+      if(props && props[k] !== undefined && props[k] !== null && props[k] !== "") return props[k];
+    }
     return fb;
   }
 
+  // Detect if coords look like EPSG:27700 (meters)
   function looksLike27700(lng, lat){
     return Math.abs(lng) > 1000 || Math.abs(lat) > 1000;
   }
 
+  // --- symbols ---
   function iconCircle(fill, scale, strokeW=3){
     return { path: google.maps.SymbolPath.CIRCLE, fillColor:fill, fillOpacity:1,
       strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:strokeW, scale };
@@ -392,13 +424,7 @@
       div.addEventListener("click", ()=>{
         map.panTo({lat:c.lat, lng:c.lng});
         map.setZoom(Math.max(map.getZoom(), 14));
-        info.setContent(
-          `<b>${escapeHtml(c.name||"Selected")}</b><br/>` +
-          `Score: ${escapeHtml(c.score.toFixed(3))}<br/>` +
-          `Demand: ${(c.d01*100).toFixed(0)} | Equity: ${(c.e01*100).toFixed(0)} | Penalty: ${(c.p01*100).toFixed(0)}<br/>` +
-          `Contrib: +${c.contribDemand.toFixed(3)} +${c.contribEquity.toFixed(3)} −${c.contribPenalty.toFixed(3)}<br/>` +
-          `LSOA: ${escapeHtml(c.lsoaCode||"n/a")}`
-        );
+        info.setContent(buildCandidateInfoHtml(c, true));
         info.setPosition({lat:c.lat, lng:c.lng});
         info.open({map});
       });
@@ -417,7 +443,6 @@
     setScorePanelVisible();
     styleLSOA();
 
-    // When switching to score tab, refresh the content (if scenario already run)
     if(activeTab === "score"){
       updateWeightUI();
       renderScoreTab();
@@ -452,7 +477,7 @@
     }
   }
 
-  // geometry helpers
+  // --- build polygon index from raw GeoJSON ---
   function makePolygonsFromGeometry(geom){
     const polys = [];
     if(!geom) return polys;
@@ -482,7 +507,10 @@
 
   function normalize01(arr){
     let mn=Infinity, mx=-Infinity;
-    for(const v of arr){ if(!Number.isFinite(v)) continue; mn=Math.min(mn,v); mx=Math.max(mx,v); }
+    for(const v of arr){
+      if(!Number.isFinite(v)) continue;
+      mn=Math.min(mn,v); mx=Math.max(mx,v);
+    }
     if(!Number.isFinite(mn) || !Number.isFinite(mx) || mn===mx) return { norm: (_)=>0.5 };
     return { norm: (x)=> (x-mn)/(mx-mn) };
   }
@@ -543,13 +571,24 @@
         properties:{
           rank:i+1,
           name:c.name||"Selected",
-          score:c.score,
-          demand01:c.d01,
-          equity01:c.e01,
-          penalty01:c.p01,
+          score:+c.score,
+          demand01:+c.d01,
+          equity01:+c.e01,
+          penalty01:+c.p01,
           lsoa:c.lsoaCode||"",
-          population: c.pop ?? null,
-          median_age: c.medianAge ?? null
+          population: Number.isFinite(c.pop)? Math.round(c.pop): null,
+          median_age: Number.isFinite(c.medianAge)? +c.medianAge.toFixed(1): null,
+
+          // enriched extras (for transparency)
+          equity_raw: Number.isFinite(c.equityRaw)? +c.equityRaw : null,
+          penalty_raw: Number.isFinite(c.penaltyRaw)? +c.penaltyRaw : null,
+          parking_constraint: Number.isFinite(c.parkingConstraint)? +c.parkingConstraint.toFixed(4) : null,
+          share_flats: Number.isFinite(c.shareFlats)? +c.shareFlats.toFixed(4) : null,
+          share_dense_housing: Number.isFinite(c.shareDense)? +c.shareDense.toFixed(4) : null,
+          share_rented: Number.isFinite(c.shareRented)? +c.shareRented.toFixed(4) : null,
+          share_no_car: Number.isFinite(c.shareNoCar)? +c.shareNoCar.toFixed(4) : null,
+          wimd_rank: Number.isFinite(c.wimdRank)? +c.wimdRank : null,
+          wimd_decile: c.wimdDecile ?? null
         }
       }))
     };
@@ -583,11 +622,12 @@
       m.className="itemMeta";
       m.innerHTML = `
         <span class="badge">Score: ${escapeHtml(c.score.toFixed(3))}</span>
-        <span class="badge">Demand: ${(c.d01*100).toFixed(0)}</span>
-        <span class="badge">Equity: ${(c.e01*100).toFixed(0)}</span>
+        <span class="badge">D ${(c.d01*100).toFixed(0)}</span>
+        <span class="badge">E ${(c.e01*100).toFixed(0)}</span>
+        <span class="badge">P ${(c.p01*100).toFixed(0)}</span>
         <span class="badge">LSOA: ${escapeHtml(c.lsoaCode || "n/a")}</span>
-        <span class="badge">Pop: ${Number.isFinite(c.pop)? Math.round(c.pop): "n/a"}</span>
-        <span class="badge">Age: ${Number.isFinite(c.medianAge)? c.medianAge.toFixed(1): "n/a"}</span>
+        <span class="badge">ParkC: ${Number.isFinite(c.parkingConstraint)? c.parkingConstraint.toFixed(2): "n/a"}</span>
+        <span class="badge">NoCar: ${Number.isFinite(c.shareNoCar)? (c.shareNoCar*100).toFixed(0)+"%":"n/a"}</span>
       `;
 
       div.appendChild(t);
@@ -596,20 +636,48 @@
       div.addEventListener("click", ()=>{
         map.panTo({lat:c.lat, lng:c.lng});
         map.setZoom(Math.max(map.getZoom(), 14));
-        info.setContent(
-          `<b>${escapeHtml(c.name||"Selected")}</b><br/>` +
-          `Score: ${escapeHtml(c.score.toFixed(3))}<br/>` +
-          `Demand: ${(c.d01*100).toFixed(0)} | Equity: ${(c.e01*100).toFixed(0)}<br/>` +
-          `LSOA: ${escapeHtml(c.lsoaCode||"n/a")}<br/>` +
-          `Population: ${Number.isFinite(c.pop)? Math.round(c.pop): "n/a"}<br/>` +
-          `Median age: ${Number.isFinite(c.medianAge)? c.medianAge.toFixed(1): "n/a"}`
-        );
+        info.setContent(buildCandidateInfoHtml(c, false));
         info.setPosition({lat:c.lat, lng:c.lng});
         info.open({map});
       });
 
       list.appendChild(div);
     });
+  }
+
+  function buildCandidateInfoHtml(c, isScoreTab){
+    const pct = (x)=> Number.isFinite(x) ? (x*100).toFixed(0)+"%" : "n/a";
+    const v01 = (x)=> Number.isFinite(x) ? (x*100).toFixed(0) : "n/a";
+    const n2 = (x)=> Number.isFinite(x) ? x.toFixed(2) : "n/a";
+    const n3 = (x)=> Number.isFinite(x) ? x.toFixed(3) : "n/a";
+
+    let extra = `
+      <div style="margin-top:6px;">
+        <span class="badge">parking_constraint ${n2(c.parkingConstraint)}</span>
+        <span class="badge">share_flats ${pct(c.shareFlats)}</span>
+        <span class="badge">share_dense ${pct(c.shareDense)}</span>
+        <span class="badge">share_rented ${pct(c.shareRented)}</span>
+        <span class="badge">share_no_car ${pct(c.shareNoCar)}</span>
+        <span class="badge">wimd_rank ${Number.isFinite(c.wimdRank)? Math.round(c.wimdRank):"n/a"}</span>
+        <span class="badge">wimd_decile ${c.wimdDecile ?? "n/a"}</span>
+      </div>
+    `;
+
+    let contrib = isScoreTab ? `
+      <div style="margin-top:6px;">
+        Contrib: +${n3(c.contribDemand)} +${n3(c.contribEquity)} −${n3(c.contribPenalty)}
+      </div>` : "";
+
+    return `
+      <b>${escapeHtml(c.name||"Selected")}</b><br/>
+      Score: ${escapeHtml(c.score.toFixed(3))}<br/>
+      Demand: ${v01(c.d01)} | Equity: ${v01(c.e01)} | Penalty: ${v01(c.p01)}<br/>
+      LSOA: ${escapeHtml(c.lsoaCode||"n/a")}<br/>
+      Population: ${Number.isFinite(c.pop)? Math.round(c.pop): "n/a"}<br/>
+      Median age: ${Number.isFinite(c.medianAge)? c.medianAge.toFixed(1): "n/a"}<br/>
+      ${contrib}
+      ${extra}
+    `;
   }
 
   function downloadText(filename, text){
@@ -622,7 +690,14 @@
   }
 
   function exportCSV(){
-    const rows = [["rank","name","lat","lng","score","demand01","equity01","penalty01","lsoa","population","median_age"]];
+    const rows = [[
+      "rank","name","lat","lng","score","demand01","equity01","penalty01","lsoa",
+      "population","median_age",
+      "equity_raw","penalty_raw",
+      "parking_constraint","share_flats","share_dense_housing","share_rented","share_no_car",
+      "wimd_rank","wimd_decile"
+    ]];
+
     selected.forEach((c,i)=>{
       rows.push([
         i+1,
@@ -635,9 +710,21 @@
         c.p01.toFixed(6),
         c.lsoaCode||"",
         Number.isFinite(c.pop)? Math.round(c.pop): "",
-        Number.isFinite(c.medianAge)? c.medianAge: ""
+        Number.isFinite(c.medianAge)? c.medianAge: "",
+
+        Number.isFinite(c.equityRaw)? c.equityRaw: "",
+        Number.isFinite(c.penaltyRaw)? c.penaltyRaw: "",
+
+        Number.isFinite(c.parkingConstraint)? c.parkingConstraint: "",
+        Number.isFinite(c.shareFlats)? c.shareFlats: "",
+        Number.isFinite(c.shareDense)? c.shareDense: "",
+        Number.isFinite(c.shareRented)? c.shareRented: "",
+        Number.isFinite(c.shareNoCar)? c.shareNoCar: "",
+        Number.isFinite(c.wimdRank)? c.wimdRank: "",
+        (c.wimdDecile ?? "")
       ]);
     });
+
     const csv = rows.map(r=> r.map(x=> `"${x}"`).join(",")).join("\n");
     downloadText("planner_shortlist.csv", csv);
   }
@@ -657,12 +744,29 @@
           penalty01:+c.p01.toFixed(6),
           lsoa:c.lsoaCode||"",
           population: Number.isFinite(c.pop)? Math.round(c.pop): null,
-          median_age: Number.isFinite(c.medianAge)? +c.medianAge.toFixed(1): null
+          median_age: Number.isFinite(c.medianAge)? +c.medianAge.toFixed(1): null,
+
+          equity_raw: Number.isFinite(c.equityRaw)? +c.equityRaw : null,
+          penalty_raw: Number.isFinite(c.penaltyRaw)? +c.penaltyRaw : null,
+          parking_constraint: Number.isFinite(c.parkingConstraint)? +c.parkingConstraint.toFixed(4) : null,
+          share_flats: Number.isFinite(c.shareFlats)? +c.shareFlats.toFixed(4) : null,
+          share_dense_housing: Number.isFinite(c.shareDense)? +c.shareDense.toFixed(4) : null,
+          share_rented: Number.isFinite(c.shareRented)? +c.shareRented.toFixed(4) : null,
+          share_no_car: Number.isFinite(c.shareNoCar)? +c.shareNoCar.toFixed(4) : null,
+          wimd_rank: Number.isFinite(c.wimdRank)? +c.wimdRank : null,
+          wimd_decile: c.wimdDecile ?? null
         }
       }))
     };
     downloadText("planner_shortlist.geojson", JSON.stringify(fc, null, 2));
   }
+
+  // ===== penalty hook (optional future extension) =====
+  // Right now we use LSOA parking_constraint (already 0-1).
+  // If you want "too close to existing chargers" as penalty:
+  // - compute nearest supply distance (km) for each candidate
+  // - penaltyRaw = 1/(dist+eps) or clamp into [0,1]
+  // Keep for later if you need.
 
   function runScenario(){
     const P = Math.max(1, Math.floor(num(document.getElementById("pSel").value, 10)));
@@ -681,7 +785,7 @@
       return;
     }
 
-    // normalize features
+    // normalize components
     const dN = normalize01(candPts.map(c=>c.demandRaw));
     const eN = normalize01(candPts.map(c=>c.equityRaw));
     const pN = normalize01(candPts.map(c=>c.penaltyRaw));
@@ -719,6 +823,7 @@
     setStatus(
       `Scenario done.\nYear=${year}, target=${Math.round(target)}, supply=${Math.round(supplyTotal)}, gap=${Math.round(gap)}.\n` +
       `Candidates=${candPts.length}, selected Top ${selected.length}.\n` +
+      `Scoring uses enriched equity_proxy/wimd + parking_constraint penalty.\n` +
       `Switch to "Gap map" tab for underserved areas.`
     );
   }
@@ -731,6 +836,7 @@
     });
     info = new google.maps.InfoWindow();
 
+    // layers
     supplyLayer   = new google.maps.Data({map});
     lsoaLayer     = new google.maps.Data({map});
     candLayer     = new google.maps.Data({map});
@@ -762,7 +868,7 @@
     document.getElementById("btnExportGeo").addEventListener("click", exportGeoJSON);
     document.getElementById("btnPrint").addEventListener("click", ()=>window.print());
 
-    // sliders -> auto re-run scenario + refresh scoring
+    // sliders -> auto re-run scenario
     function hookSlider(id){
       const el = document.getElementById(id);
       if(!el) return;
@@ -793,23 +899,60 @@
       candLayer.addGeoJson(candidates);
       if(solution) solutionLayer.addGeoJson(solution);
 
-      // build LSOA index from raw geojson polygons (for join)
+      // build LSOA index from enriched geojson polygons (for join)
       lsoaIndex = (lsoa.features||[]).map((f)=>{
         const props = f.properties || {};
-        const code = getProp(props, FIELD.code, "LSOA");
-        const pop  = num(getProp(props, FIELD.pop, null), NaN);
+        const code = String(getProp(props, FIELD.code, "LSOA")).trim();
 
+        const pop  = num(getProp(props, FIELD.pop, null), NaN);
         const demandRaw = Number.isFinite(pop) ? pop : num(getProp(props, FIELD.demand, 1), 1);
 
-        let equityVal = getProp(props, FIELD.equity, null);
+        const equityRaw = num(getProp(props, FIELD.equity, null), NaN);
+        const penaltyRaw = num(getProp(props, FIELD.penalty, null), NaN);
+
         const medAge = num(getProp(props, FIELD.median_age, null), NaN);
-        if(equityVal === null || equityVal === undefined || equityVal === ""){
-          equityVal = Number.isFinite(medAge) ? medAge : 0;
-        }
-        const equityRaw = num(equityVal, 0);
+
+        // extra enriched fields
+        const parkingConstraint = num(getProp(props, ["parking_constraint"], null), NaN);
+        const shareFlats = num(getProp(props, ["share_flats"], null), NaN);
+        const shareDense = num(getProp(props, ["share_dense_housing"], null), NaN);
+        const shareRented = num(getProp(props, ["share_rented"], null), NaN);
+        const shareNoCar = num(getProp(props, ["share_no_car"], null), NaN);
+        const wimdRank = num(getProp(props, ["wimd_rank"], null), NaN);
+        const wimdDecile = getProp(props, ["wimd_decile"], null);
 
         const polygons = makePolygonsFromGeometry(f.geometry);
-        return { code, demandRaw, equityRaw, pop, medianAge: medAge, polygons, feature: null, supplyRaw:0 };
+
+        // if equityRaw missing entirely, fallback to median_age (last resort)
+        let eq = equityRaw;
+        if(!Number.isFinite(eq)){
+          eq = Number.isFinite(medAge) ? medAge : 0;
+        }
+
+        // if penaltyRaw missing, fallback to parking_constraint (should exist), else 0
+        let pen = penaltyRaw;
+        if(!Number.isFinite(pen)){
+          pen = Number.isFinite(parkingConstraint) ? parkingConstraint : 0;
+        }
+
+        return {
+          code,
+          demandRaw,
+          equityRaw: eq,
+          penaltyRaw: pen,
+          pop,
+          medianAge: medAge,
+          parkingConstraint,
+          shareFlats,
+          shareDense,
+          shareRented,
+          shareNoCar,
+          wimdRank,
+          wimdDecile,
+          polygons,
+          feature: null,
+          supplyRaw: 0
+        };
       });
 
       // Map Data layer features back to index so we can set _gapScore
@@ -822,8 +965,9 @@
           lsoa11cd: ft.getProperty("lsoa11cd"),
           code: ft.getProperty("code"),
           id: ft.getProperty("id"),
+          _lsoa_code: ft.getProperty("_lsoa_code")
         };
-        const code = getProp(propsLike, FIELD.code, null);
+        const code = String(getProp(propsLike, FIELD.code, "") || "").trim();
         if(code && lsoaByCode.has(code)){
           const rec = lsoaByCode.get(code);
           rec.feature = ft;
@@ -843,7 +987,7 @@
         supplyPts.push({lat,lng,sockets: sockets || 1});
       }
 
-      // candidate cache + join
+      // candidate cache + join to LSOA (inherit enriched equity/penalty)
       candPts = [];
       for(const f of (candidates.features||[])){
         if(!f.geometry || f.geometry.type!=="Point") continue;
@@ -859,11 +1003,29 @@
 
         const demandRaw = rec ? num(rec.demandRaw, 1) : 1;
         const equityRaw = rec ? num(rec.equityRaw, 0) : 0;
+        const penaltyRaw = rec ? num(rec.penaltyRaw, 0) : 0;
+
         const pop = rec ? num(rec.pop, NaN) : NaN;
         const medianAge = rec ? num(rec.medianAge, NaN) : NaN;
 
-        const penaltyRaw = 0;
-        candPts.push({lat,lng,name, demandRaw, equityRaw, penaltyRaw, lsoaCode: rec? rec.code : "", pop, medianAge});
+        candPts.push({
+          lat,lng,name,
+          demandRaw,
+          equityRaw,
+          penaltyRaw,
+          lsoaCode: rec? rec.code : "",
+          pop,
+          medianAge,
+
+          // enriched extras for display/export
+          parkingConstraint: rec ? num(rec.parkingConstraint, NaN) : NaN,
+          shareFlats: rec ? num(rec.shareFlats, NaN) : NaN,
+          shareDense: rec ? num(rec.shareDense, NaN) : NaN,
+          shareRented: rec ? num(rec.shareRented, NaN) : NaN,
+          shareNoCar: rec ? num(rec.shareNoCar, NaN) : NaN,
+          wimdRank: rec ? num(rec.wimdRank, NaN) : NaN,
+          wimdDecile: rec ? rec.wimdDecile : null
+        });
       }
 
       // initial KPI
@@ -881,6 +1043,9 @@
         `LSOA polygons: ${(lsoa.features||[]).length}\n` +
         `Candidates: ${candPts.length}\n` +
         `Solution overlay (p10): ${(solution && solution.features)? solution.features.length : 0}\n\n` +
+        `LSOA enriched fields used:\n` +
+        `  Equity: equity_proxy / wimd_norm (fallbacks)\n` +
+        `  Penalty: parking_constraint\n\n` +
         `Next: Run scenario (Top P) → then go to Scoring tab.`
       );
 
