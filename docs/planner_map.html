@@ -72,7 +72,7 @@
 
 <div class="panel">
   <div class="title">Planner view (Cardiff)</div>
-  <div class="muted">Uses your existing files: supply + LSOA + demand centroids as candidates + optional p10 solution overlay.</div>
+  <div class="muted">Uses: supply + LSOA (with population/median age) + demand centroids as candidates + optional p10 overlay.</div>
 
   <div class="section">
     <div style="font-weight:900; margin-bottom:6px;">Scenario (P sites) + scoring (P3/P4)</div>
@@ -110,8 +110,9 @@
     </div>
 
     <div class="muted">
-      Default scoring (transparent): Score = 0.6*Demand + 0.4*Equity − 0.2*Penalty.
-      <br/>Demand will use <code>population/pop</code> if present in LSOA; otherwise falls back to any <code>demand</code>-like field or 1.
+      Scoring (transparent): Score = 0.6*Demand + 0.4*Equity − 0.2*Penalty.<br/>
+      Demand: uses <code>population</code> (joined) if present.<br/>
+      Equity: uses (priority) <code>equity/on_street/imd</code>; otherwise uses <code>median_age</code> as a proxy.
     </div>
   </div>
 
@@ -138,15 +139,15 @@
   <div class="legend">
     <b>Legend</b><br/>
     <div><span class="swatch" style="background:#2563eb;"></span>Blue dots: existing chargers</div>
-    <div><span class="swatch" style="background:#f59e0b;"></span>Orange dots: candidate demand centroids (placeholder candidates)</div>
+    <div><span class="swatch" style="background:#f59e0b;"></span>Orange dots: candidate demand centroids</div>
     <div><span class="swatch" style="background:#ef4444;"></span>Red stars: selected (Top P)</div>
-    <div><span class="swatch" style="background:#7c3aed;"></span>Purple triangles: your existing new_sites_p10 (overlay)</div>
+    <div><span class="swatch" style="background:#7c3aed;"></span>Purple triangles: new_sites_p10 overlay</div>
     <div class="muted" style="margin-top:6px;">Gap map colors LSOA by high demand + low provision (P2).</div>
   </div>
 </div>
 
 <script>
-  // ====== PUT YOUR KEY HERE ======
+  // ====== PUT YOUR KEY HERE (you already did) ======
   const GMAPS_KEY = "AIzaSyAUproFl8jRStUlFwOKbQ8yh2CjNJ_H2c4";
 
   const BASE = new URL("./", window.location.href);
@@ -157,18 +158,17 @@
     solution:   new URL("data/processed/new_sites_p10.geojson", BASE).href
   };
 
-
-
   const CARDIFF_BOUNDS = { north: 51.566, south: 51.410, east: -3.065, west: -3.333 };
 
-  // Roadmap target (edit to match your evidence precisely)
+  // Roadmap targets (edit if needed)
   const TARGET_BY_YEAR = { "2026": 700, "2030": 1500, "2035": 2000 };
 
-  // Try these fields (you can add more)
+  // Fields
   const FIELD = {
-  // LSOA (your geojson uses 2021 codes)
+    // LSOA
     code:   ["LSOA21CD","lsoa21cd","LSOA11CD","lsoa11cd","code","id"],
     pop:    ["population","pop","pop_total","Pop","total_pop","Total"],
+    median_age: ["median_age","median age","Median age mid-2024","Median age mid-2023","Median age mid-2022"],
     demand: ["demand","demand_score","ev_owners","owners","weight"],
     equity: ["equity","equity_score","on_street","no_offstreet","imd","deprivation"],
     // supply
@@ -176,19 +176,17 @@
     name:   ["name","operator","location","Site","address","Address"]
   };
 
-
-  // Transparent scoring weights (P3)
+  // Weights
   const W = { demand: 0.60, equity: 0.40, penalty: 0.20 };
 
   let map, info;
   let supplyLayer, lsoaLayer, candLayer, selectedLayer, solutionLayer;
 
   // caches
-  let lsoaIndex = [];       // [{code, demandRaw, equityRaw, polygons:[google.maps.Polygon], feature}]
-  let supplyPts = [];       // [{lat,lng,sockets}]
-  let candPts = [];         // [{lat,lng,name, demandRaw,equityRaw, penaltyRaw, score, ...}]
-  let selected = [];        // top P
-
+  let lsoaIndex = [];   // [{code, demandRaw, equityRaw, medianAge, polygons:[Polygon], feature}]
+  let supplyPts = [];   // [{lat,lng,sockets}]
+  let candPts = [];     // [{lat,lng,name, demandRaw,equityRaw, penaltyRaw, score, lsoaCode, pop, medianAge}]
+  let selected = [];    // top P
   let activeTab = "kpi";
 
   function setStatus(msg){ document.getElementById("status").textContent = msg || ""; }
@@ -206,6 +204,12 @@
     return fb;
   }
 
+  // Detect if coords look like EPSG:27700 (meters)
+  function looksLike27700(lng, lat){
+    // OSGB eastings/northings are ~[250k..350k], [150k..250k] for Cardiff-ish
+    return Math.abs(lng) > 1000 || Math.abs(lat) > 1000;
+  }
+
   // --- symbols ---
   function iconCircle(fill, scale, strokeW=3){
     return { path: google.maps.SymbolPath.CIRCLE, fillColor:fill, fillOpacity:1,
@@ -220,7 +224,7 @@
       strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:1, scale:6 };
   }
 
-  // --- tab & choropleth ---
+  // --- tabs & choropleth ---
   function setTab(tab){
     activeTab = tab;
     document.getElementById("tabKpi").classList.toggle("active", tab==="kpi");
@@ -228,17 +232,33 @@
     document.getElementById("tabScore").classList.toggle("active", tab==="score");
     styleLSOA();
   }
+
   function styleLSOA(){
+    if(!lsoaLayer) return;
+
     if(activeTab === "gap"){
       lsoaLayer.setStyle((ft)=>{
         const s = num(ft.getProperty("_gapScore"), 0);
         let fill = "#10b981";
         if(s > 0.66) fill = "#f87171";
         else if(s > 0.33) fill = "#f59e0b";
-        return { fillColor:fill, fillOpacity:0.35, strokeColor:"#111827", strokeOpacity:0.25, strokeWeight:1 };
+        return {
+          fillColor: fill,
+          fillOpacity: 0.42,
+          strokeColor: "#111827",
+          strokeOpacity: 0.75,
+          strokeWeight: 2.5
+        };
       });
     } else {
-      lsoaLayer.setStyle({ fillColor:"#93c5fd", fillOpacity:0.08, strokeColor:"#2563eb", strokeOpacity:0.45, strokeWeight:1.5 });
+      // Default boundary: clearer (you complained about not seeing it)
+      lsoaLayer.setStyle({
+        fillColor: "#93c5fd",
+        fillOpacity: 0.18,
+        strokeColor: "#2563eb",
+        strokeOpacity: 0.85,
+        strokeWeight: 2.5
+      });
     }
   }
 
@@ -249,7 +269,6 @@
 
     const toPath = (ring) => ring.map(([lng,lat]) => ({lat, lng}));
     const buildPoly = (rings) => {
-      // rings: [outer, hole1, hole2...]
       const paths = rings.map(toPath);
       return new google.maps.Polygon({ paths });
     };
@@ -271,7 +290,6 @@
     return false;
   }
 
-  // --- normalization ---
   function normalize01(arr){
     let mn=Infinity, mx=-Infinity;
     for(const v of arr){ if(!Number.isFinite(v)) continue; mn=Math.min(mn,v); mx=Math.max(mx,v); }
@@ -282,12 +300,11 @@
   function computeSupplyTotal(){
     let sum = 0;
     for(const p of supplyPts) sum += num(p.sockets, 0);
-    if(sum === 0 && supplyPts.length) sum = supplyPts.length; // fallback
+    if(sum === 0 && supplyPts.length) sum = supplyPts.length;
     return sum;
   }
 
   function joinPointToLSOA(latLng){
-    // return the first matching LSOA record
     for(const rec of lsoaIndex){
       if(containsAny(rec.polygons, latLng)) return rec;
     }
@@ -307,11 +324,10 @@
     document.getElementById("k_gap").textContent = String(Math.round(gap));
 
     if(!candPts.length){
-      setStatus("No candidates loaded. Check demand_points_cardiff_exact.geojson path.");
+      setStatus("No candidates loaded. Check demand_points_cardiff_exact_pop_wgs84.geojson path.");
       return;
     }
 
-    // normalize candidate demand/equity/penalty
     const dN = normalize01(candPts.map(c=>c.demandRaw));
     const eN = normalize01(candPts.map(c=>c.equityRaw));
     const pN = normalize01(candPts.map(c=>c.penaltyRaw));
@@ -328,11 +344,11 @@
 
     updateSelectedLayer();
     renderList();
+
     document.getElementById("k_selected").textContent = String(selected.length);
     document.getElementById("btnExportCsv").disabled = selected.length===0;
     document.getElementById("btnExportGeo").disabled = selected.length===0;
 
-    // compute LSOA gap score (P1/P2): high demand + low provision
     computeLSOAGapScores();
     styleLSOA();
 
@@ -344,8 +360,7 @@
   }
 
   function computeLSOAGapScores(){
-    // First: allocate supply to LSOA by point-in-polygon
-    const supplyByLSOA = new Map(); // code -> sockets
+    const supplyByLSOA = new Map();
     for(const s of supplyPts){
       const ll = new google.maps.LatLng(s.lat, s.lng);
       const rec = joinPointToLSOA(ll);
@@ -367,8 +382,8 @@
     const nd = normalize01(demandArr);
     const ns = normalize01(supplyArr);
 
-    // gapScore = demandNorm - 0.7*supplyNorm (clamped 0..1)
     for(const rec of lsoaIndex){
+      if(!rec.feature) continue;
       const d01 = nd.norm(num(rec.demandRaw, 0));
       const s01 = ns.norm(num(rec.supplyRaw, 0));
       const g = Math.max(0, Math.min(1, d01 - 0.7*s01));
@@ -384,8 +399,15 @@
         type:"Feature",
         geometry:{ type:"Point", coordinates:[c.lng, c.lat] },
         properties:{
-          rank:i+1, name:c.name||"Selected", score:c.score,
-          demand01:c.d01, equity01:c.e01, penalty01:c.p01
+          rank:i+1,
+          name:c.name||"Selected",
+          score:c.score,
+          demand01:c.d01,
+          equity01:c.e01,
+          penalty01:c.p01,
+          lsoa:c.lsoaCode||"",
+          population: c.pop ?? null,
+          median_age: c.medianAge ?? null
         }
       }))
     };
@@ -421,8 +443,9 @@
         <span class="badge">Score: ${escapeHtml(c.score.toFixed(3))}</span>
         <span class="badge">Demand: ${(c.d01*100).toFixed(0)}</span>
         <span class="badge">Equity: ${(c.e01*100).toFixed(0)}</span>
-        <span class="badge">Penalty: ${(c.p01*100).toFixed(0)}</span>
         <span class="badge">LSOA: ${escapeHtml(c.lsoaCode || "n/a")}</span>
+        <span class="badge">Pop: ${Number.isFinite(c.pop)? Math.round(c.pop): "n/a"}</span>
+        <span class="badge">Age: ${Number.isFinite(c.medianAge)? c.medianAge.toFixed(1): "n/a"}</span>
       `;
 
       div.appendChild(t);
@@ -434,8 +457,10 @@
         info.setContent(
           `<b>${escapeHtml(c.name||"Selected")}</b><br/>` +
           `Score: ${escapeHtml(c.score.toFixed(3))}<br/>` +
-          `Demand: ${(c.d01*100).toFixed(0)} | Equity: ${(c.e01*100).toFixed(0)} | Penalty: ${(c.p01*100).toFixed(0)}<br/>` +
-          `LSOA: ${escapeHtml(c.lsoaCode||"n/a")}`
+          `Demand: ${(c.d01*100).toFixed(0)} | Equity: ${(c.e01*100).toFixed(0)}<br/>` +
+          `LSOA: ${escapeHtml(c.lsoaCode||"n/a")}<br/>` +
+          `Population: ${Number.isFinite(c.pop)? Math.round(c.pop): "n/a"}<br/>` +
+          `Median age: ${Number.isFinite(c.medianAge)? c.medianAge.toFixed(1): "n/a"}`
         );
         info.setPosition({lat:c.lat, lng:c.lng});
         info.open({map});
@@ -455,9 +480,21 @@
   }
 
   function exportCSV(){
-    const rows = [["rank","name","lat","lng","score","demand01","equity01","penalty01","lsoa"]];
+    const rows = [["rank","name","lat","lng","score","demand01","equity01","penalty01","lsoa","population","median_age"]];
     selected.forEach((c,i)=>{
-      rows.push([i+1, (c.name||"").replaceAll('"','""'), c.lat, c.lng, c.score.toFixed(6), c.d01.toFixed(6), c.e01.toFixed(6), c.p01.toFixed(6), c.lsoaCode||""]);
+      rows.push([
+        i+1,
+        (c.name||"").replaceAll('"','""'),
+        c.lat,
+        c.lng,
+        c.score.toFixed(6),
+        c.d01.toFixed(6),
+        c.e01.toFixed(6),
+        c.p01.toFixed(6),
+        c.lsoaCode||"",
+        Number.isFinite(c.pop)? Math.round(c.pop): "",
+        Number.isFinite(c.medianAge)? c.medianAge: ""
+      ]);
     });
     const csv = rows.map(r=> r.map(x=> `"${x}"`).join(",")).join("\n");
     downloadText("planner_shortlist.csv", csv);
@@ -469,7 +506,17 @@
       features: selected.map((c,i)=>({
         type:"Feature",
         geometry:{type:"Point", coordinates:[c.lng,c.lat]},
-        properties:{ rank:i+1, name:c.name||"", score:+c.score.toFixed(6), demand01:+c.d01.toFixed(6), equity01:+c.e01.toFixed(6), penalty01:+c.p01.toFixed(6), lsoa:c.lsoaCode||"" }
+        properties:{
+          rank:i+1,
+          name:c.name||"",
+          score:+c.score.toFixed(6),
+          demand01:+c.d01.toFixed(6),
+          equity01:+c.e01.toFixed(6),
+          penalty01:+c.p01.toFixed(6),
+          lsoa:c.lsoaCode||"",
+          population: Number.isFinite(c.pop)? Math.round(c.pop): null,
+          median_age: Number.isFinite(c.medianAge)? +c.medianAge.toFixed(1): null
+        }
       }))
     };
     downloadText("planner_shortlist.geojson", JSON.stringify(fc, null, 2));
@@ -496,9 +543,10 @@
     selectedLayer.setStyle(()=>({ icon: iconStar("#ef4444"), zIndex: 9999 }));
     solutionLayer.setStyle(()=>({ icon: iconTriangle("#7c3aed"), zIndex: 850 }));
 
+    // Make LSOA visible immediately
     styleLSOA();
 
-    // UI
+    // UI toggles
     document.getElementById("ckSupply").addEventListener("change",(e)=> supplyLayer.setMap(e.target.checked? map:null));
     document.getElementById("ckLSOA").addEventListener("change",(e)=> lsoaLayer.setMap(e.target.checked? map:null));
     document.getElementById("ckCandidates").addEventListener("change",(e)=> candLayer.setMap(e.target.checked? map:null));
@@ -514,7 +562,6 @@
     document.getElementById("btnExportGeo").addEventListener("click", exportGeoJSON);
     document.getElementById("btnPrint").addEventListener("click", ()=>window.print());
 
-    // load data
     try{
       setStatus("Loading GeoJSON…");
 
@@ -525,45 +572,61 @@
         loadGeoJSON(DATA_URLS.solution).catch(()=>null)
       ]);
 
+      // quick sanity: check candidate coords are WGS84
+      let badCandidateCount = 0;
+      for(const f of (candidates.features||[])){
+        if(!f.geometry || f.geometry.type!=="Point") continue;
+        const [lng, lat] = f.geometry.coordinates || [];
+        if(typeof lat==="number" && typeof lng==="number" && looksLike27700(lng, lat)){
+          badCandidateCount++;
+        }
+      }
+
       // draw layers
       supplyLayer.addGeoJson(supply);
       lsoaLayer.addGeoJson(lsoa);
       candLayer.addGeoJson(candidates);
       if(solution) solutionLayer.addGeoJson(solution);
 
-      // build LSOA index from raw GeoJSON (for joins)
+      // build LSOA index from raw geojson polygons (for join)
       lsoaIndex = (lsoa.features||[]).map((f)=>{
         const props = f.properties || {};
         const code = getProp(props, FIELD.code, "LSOA");
         const pop  = num(getProp(props, FIELD.pop, null), NaN);
-        const dem  = Number.isFinite(pop) ? pop : num(getProp(props, FIELD.demand, 1), 1);
-        const eq   = num(getProp(props, FIELD.equity, 0), 0);
-        const polygons = makePolygonsFromGeometry(f.geometry);
-        const medAge = num(getProp(props, ["median_age","median age","Median age mid-2024"], null), NaN);
-        return { code, demandRaw: dem, equityRaw: eq, medianAge: medAge, polygons, feature: null };
 
+        // Demand: population first, fallback to demand-like field, else 1
+        const demandRaw = Number.isFinite(pop) ? pop : num(getProp(props, FIELD.demand, 1), 1);
+
+        // Equity: try equity/on_street/imd first, else use median_age as proxy
+        let equityVal = getProp(props, FIELD.equity, null);
+        const medAge = num(getProp(props, FIELD.median_age, null), NaN);
+        if(equityVal === null || equityVal === undefined || equityVal === ""){
+          equityVal = Number.isFinite(medAge) ? medAge : 0;
+        }
+        const equityRaw = num(equityVal, 0);
+
+        const polygons = makePolygonsFromGeometry(f.geometry);
+        return { code, demandRaw, equityRaw, pop, medianAge: medAge, polygons, feature: null, supplyRaw:0 };
       });
 
-      // map Data layer features back to lsoaIndex by code (so we can set _gapScore later)
+      // Map Data layer features back to index so we can set _gapScore
       const lsoaByCode = new Map(lsoaIndex.map(r=>[r.code, r]));
-        lsoaLayer.forEach((ft)=>{
+      lsoaLayer.forEach((ft)=>{
         const propsLike = {
-            LSOA21CD: ft.getProperty("LSOA21CD"),
-            lsoa21cd: ft.getProperty("lsoa21cd"),
-            LSOA11CD: ft.getProperty("LSOA11CD"),
-            lsoa11cd: ft.getProperty("lsoa11cd"),
-            code: ft.getProperty("code"),
-            id: ft.getProperty("id"),
+          LSOA21CD: ft.getProperty("LSOA21CD"),
+          lsoa21cd: ft.getProperty("lsoa21cd"),
+          LSOA11CD: ft.getProperty("LSOA11CD"),
+          lsoa11cd: ft.getProperty("lsoa11cd"),
+          code: ft.getProperty("code"),
+          id: ft.getProperty("id"),
         };
         const code = getProp(propsLike, FIELD.code, null);
-
         if(code && lsoaByCode.has(code)){
-            const rec = lsoaByCode.get(code);
-            rec.feature = ft;
-            ft.setProperty("code", rec.code); // keep a consistent field for UI
+          const rec = lsoaByCode.get(code);
+          rec.feature = ft;
+          ft.setProperty("code", rec.code);
         }
-    });
-
+      });
 
       // supply cache
       supplyPts = [];
@@ -571,29 +634,40 @@
         if(!f.geometry || f.geometry.type!=="Point") continue;
         const [lng, lat] = f.geometry.coordinates || [];
         if(typeof lat!=="number" || typeof lng!=="number") continue;
+        if(looksLike27700(lng, lat)) continue; // avoid weird supply points
         const props = f.properties || {};
         const sockets = num(getProp(props, FIELD.sockets, 0), 0);
         supplyPts.push({lat,lng,sockets: sockets || 1});
       }
 
-      // candidates cache (from demand points) + join to LSOA to get demand/equity
+      // candidate cache + join
       candPts = [];
+      let usedCandidates = 0, skippedCandidates = 0;
       for(const f of (candidates.features||[])){
         if(!f.geometry || f.geometry.type!=="Point") continue;
         const [lng, lat] = f.geometry.coordinates || [];
         if(typeof lat!=="number" || typeof lng!=="number") continue;
-        const props = f.properties || {};
-        const name = getProp(props, ["name","id","site","label"], "Demand centroid");
-        const ll = new google.maps.LatLng(lat, lng);
 
+        if(looksLike27700(lng, lat)){
+          // This means you accidentally loaded a 27700 file
+          skippedCandidates++;
+          continue;
+        }
+
+        const props = f.properties || {};
+        const name = getProp(props, ["name","id","site","label","LSOA21NM","LSOA11NM"], "Demand centroid");
+
+        const ll = new google.maps.LatLng(lat, lng);
         const rec = joinPointToLSOA(ll);
+
         const demandRaw = rec ? num(rec.demandRaw, 1) : 1;
         const equityRaw = rec ? num(rec.equityRaw, 0) : 0;
+        const pop = rec ? num(rec.pop, NaN) : NaN;
+        const medianAge = rec ? num(rec.medianAge, NaN) : NaN;
 
-        // penalty placeholder (future: grid constraint, parking feasibility, delivery risk)
-        const penaltyRaw = 0;
-
-        candPts.push({lat,lng,name, demandRaw, equityRaw, penaltyRaw, lsoaCode: rec? rec.code : ""});
+        const penaltyRaw = 0; // placeholder
+        candPts.push({lat,lng,name, demandRaw, equityRaw, penaltyRaw, lsoaCode: rec? rec.code : "", pop, medianAge});
+        usedCandidates++;
       }
 
       // initial KPI
@@ -605,12 +679,21 @@
 
       map.fitBounds(CARDIFF_BOUNDS);
 
+      let warn = "";
+      if(badCandidateCount > 0){
+        warn += `\n[WARN] Some candidate coords look like EPSG:27700. Ensure you are using *_wgs84.geojson.`;
+      }
+      if(skippedCandidates > 0){
+        warn += `\n[WARN] Skipped ${skippedCandidates} candidate points that looked like EPSG:27700.`;
+      }
+
       setStatus(
         `Loaded.\n` +
         `Supply points: ${supplyPts.length}\n` +
         `LSOA polygons: ${(lsoa.features||[]).length}\n` +
-        `Candidates (demand points): ${candPts.length}\n` +
-        `Solution overlay (p10): ${(solution && solution.features)? solution.features.length : 0}\n\n` +
+        `Candidates (used): ${usedCandidates}\n` +
+        `Solution overlay (p10): ${(solution && solution.features)? solution.features.length : 0}\n` +
+        `${warn}\n\n` +
         `Next: Run scenario (Top P) → export shortlist.`
       );
 
@@ -625,7 +708,6 @@
 
   (function loadGoogleMaps(){
     const s = document.createElement("script");
-    // IMPORTANT: libraries=geometry for point-in-polygon
     s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GMAPS_KEY)}&callback=initMap&v=weekly&libraries=geometry`;
     s.async = true; s.defer = true;
     document.head.appendChild(s);
