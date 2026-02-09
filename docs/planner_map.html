@@ -80,7 +80,7 @@
 <div class="panel">
   <div class="title">Planner view (Cardiff)</div>
   <div class="muted">
-    Uses: supply + LSOA (enriched with WIMD + census proxies) + demand centroids as candidates + optional p10 overlay.
+    Uses: supply + LSOA (<b>enriched with WIMD + census proxies</b>) + demand centroids as candidates.
   </div>
 
   <div class="section">
@@ -109,7 +109,6 @@
       <label class="small"><input id="ckLSOA" type="checkbox" checked> LSOA boundary</label>
       <label class="small"><input id="ckCandidates" type="checkbox" checked> Candidates (demand points)</label>
       <label class="small"><input id="ckSelected" type="checkbox" checked> Selected (Top P)</label>
-      <label class="small"><input id="ckSolution" type="checkbox" checked> Show your p10 solution</label>
     </div>
 
     <div class="row">
@@ -119,10 +118,10 @@
     </div>
 
     <div class="muted">
-      Scoring (transparent): <span class="mono">Score = wd·Demand + we·Equity − wp·Penalty</span><br/>
-      Demand: uses <code>population</code> if present; else fallback to other demand-like fields.<br/>
-      Equity (new): uses <code>equity_proxy</code> / <code>wimd_norm</code> first, then old fields.<br/>
-      Penalty (new): uses <code>parking_constraint</code> (0–1) from census proxies (higher = more constrained).
+      <b>Score (transparent)</b>: <span class="mono">Score = wd·Demand + we·Equity − wp·Penalty</span><br/>
+      Demand: population (preferred) → fallback to other demand-like fields.<br/>
+      Equity: prefers <span class="mono">equity_proxy / wimd_norm</span> (higher = more deprived / higher priority).<br/>
+      Penalty: prefers <span class="mono">parking_constraint</span> (0–1, higher = more constrained), else combines census shares.
     </div>
   </div>
 
@@ -152,8 +151,8 @@
     <div class="muted" style="margin-top:6px;">
       Notes:
       <ul style="margin:6px 0 0 18px; padding:0;">
-        <li>Demand/Equity/Penalty are normalized to 0–1 before weighting.</li>
-        <li>We normalize Demand+Equity to sum to 1 (more interpretable); Penalty is independent.</li>
+        <li>Demand / Equity / Penalty all normalized to 0–1 before weighting.</li>
+        <li>Demand+Equity are re-normalized to sum to 1 (more interpretable); Penalty is independent.</li>
       </ul>
     </div>
 
@@ -197,20 +196,25 @@
     <div><span class="swatch" style="background:#2563eb;"></span>Blue dots: existing chargers</div>
     <div><span class="swatch" style="background:#f59e0b;"></span>Orange dots: candidate demand centroids</div>
     <div><span class="swatch" style="background:#ef4444;"></span>Red stars: selected (Top P)</div>
-    <div><span class="swatch" style="background:#7c3aed;"></span>Purple triangles: new_sites_p10 overlay</div>
+    <div><span class="swatch" style="background:#7c3aed;"></span>Purple triangles: p10 overlay (optional)</div>
     <div class="muted" style="margin-top:6px;">Gap map colors LSOA by high demand + low provision (P2).</div>
   </div>
 </div>
 
 <script>
+  // ===============================
+  // 0) CONFIG
+  // ===============================
   const GMAPS_KEY = "AIzaSyAUproFl8jRStUlFwOKbQ8yh2CjNJ_H2c4";
 
+  // If you want to remove "Show p10 solution overlay", set this to false.
+  const ENABLE_P10_OVERLAY = false;
+
   const BASE = new URL("./", window.location.href);
+
   const DATA_URLS = {
     supply:     new URL("data/processed/supply_chargers_ocm.geojson", BASE).href,
-    // IMPORTANT: now use ENRICHED LSOA
-    // If your file is under docs/data/processed/ instead of data/processed/,
-    // change to: new URL("docs/data/processed/demand_lsoa_cardiff_exact_pop_wgs84_enriched.geojson", BASE).href
+    // IMPORTANT: use your enriched LSOA (WIMD + census proxies already joined)
     lsoa:       new URL("data/processed/demand_lsoa_cardiff_exact_pop_wgs84_enriched.geojson", BASE).href,
     candidates: new URL("data/processed/demand_points_cardiff_exact_pop_wgs84.geojson", BASE).href,
     solution:   new URL("data/processed/new_sites_p10.geojson", BASE).href
@@ -219,31 +223,30 @@
   const CARDIFF_BOUNDS = { north: 51.566, south: 51.410, east: -3.065, west: -3.333 };
   const TARGET_BY_YEAR = { "2026": 700, "2030": 1500, "2035": 2000 };
 
-  // Field detection (LSOA enriched now has more fields)
+  // ===============================
+  // 1) FIELD MAPS (support enriched properties)
+  // ===============================
   const FIELD = {
-    // keys
-    code:   ["LSOA21CD","lsoa21cd","LSOA11CD","lsoa11cd","code","id","_lsoa_code"],
-    // demand
+    // LSOA identity
+    code:   ["LSOA21CD","lsoa21cd","LSOA11CD","lsoa11cd","code","id"],
+
+    // Demand proxies
     pop:    ["population","pop","pop_total","Pop","total_pop","Total"],
     demand: ["demand","demand_score","ev_owners","owners","weight"],
-    median_age: ["median_age","median age","Median age mid-2024","Median age mid-2023","Median age mid-2022"],
 
-    // equity (new priority)
-    equity: [
-      "equity_proxy","wimd_norm","wimd_score","imd","deprivation","equity","equity_score","on_street","no_offstreet",
-      "share_rented","share_dense_housing"
-    ],
+    // Equity proxies (WIMD preferred)
+    equity_proxy: ["equity_proxy","equity_wimd","equity_norm"],
+    wimd_norm:    ["wimd_norm","imd_norm","wimd2019_norm"],
+    wimd_rank:    ["wimd_rank","imd_rank","wimd2019_rank"],
+    wimd_decile:  ["wimd_decile","imd_decile","wimd2019_decile"],
+    median_age:   ["median_age","median age","Median age mid-2024","Median age mid-2023","Median age mid-2022"],
 
-    // penalty (new priority)
-    penalty: ["parking_constraint","share_dense_housing","share_flats","share_terraced"],
-
-    // extra useful fields (optional display)
-    share_flats: ["share_flats"],
-    share_dense: ["share_dense_housing"],
-    share_rented:["share_rented"],
-    share_no_car:["share_no_car"],
-    wimd_rank:   ["wimd_rank"],
-    wimd_decile: ["wimd_decile"],
+    // Penalty proxies (parking/install constraints)
+    parking_constraint: ["parking_constraint","constraint","install_constraint"],
+    share_flats:  ["share_flats","pct_flats","flats_share"],
+    share_dense:  ["share_dense","pct_dense","dense_share","share_terraced","pct_terraced"],
+    share_rented: ["share_rented","pct_rented","rented_share"],
+    share_no_car: ["share_no_car","pct_no_car","no_car_share"],
 
     // supply
     sockets:["sockets","SocketCount","socket_count","connectors","num_sockets","units"],
@@ -253,26 +256,35 @@
   // fallback weights (sliders override)
   const W = { demand: 0.60, equity: 0.40, penalty: 0.20 };
 
+  // ===============================
+  // 2) STATE
+  // ===============================
   let map, info;
   let supplyLayer, lsoaLayer, candLayer, selectedLayer, solutionLayer;
 
-  // caches
-  let lsoaIndex = [];   // [{code, demandRaw, equityRaw, penaltyRaw, props..., polygons, feature}]
-  let supplyPts = [];   // [{lat,lng,sockets}]
-  let candPts = [];     // [{lat,lng,name, demandRaw,equityRaw,penaltyRaw, extras..., score, lsoaCode}]
-  let selected = [];    // top P
+  let lsoaIndex = [];   // [{code, demandRaw, equityRaw, penaltyRaw, proxies..., polygons, feature}]
+  let supplyPts = [];
+  let candPts = [];
+  let selected = [];
   let activeTab = "kpi";
 
+  // ===============================
+  // 3) UTILS
+  // ===============================
   function setStatus(msg){ document.getElementById("status").textContent = msg || ""; }
   function escapeHtml(s){
     return String(s||"").replace(/[&<>"']/g,(c)=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
   }
-  async function loadGeoJSON(url){
-    const res = await fetch(url,{cache:"no-store"});
-    if(!res.ok) throw new Error(`Fetch failed: ${res.status} ${url}`);
-    return await res.json();
-  }
   function num(x, fb=0){ const v=Number(x); return Number.isFinite(v)? v: fb; }
+  function clamp01(x){ return Math.max(0, Math.min(1, x)); }
+
+  // some shares might be in 0..100; convert to 0..1
+  function pctTo01(x){
+    const v = num(x, NaN);
+    if(!Number.isFinite(v)) return NaN;
+    return (v > 1.0001) ? clamp01(v/100) : clamp01(v);
+  }
+
   function getProp(props, keys, fb=null){
     for(const k of keys){
       if(props && props[k] !== undefined && props[k] !== null && props[k] !== "") return props[k];
@@ -280,7 +292,20 @@
     return fb;
   }
 
-  // Detect if coords look like EPSG:27700 (meters)
+  async function loadGeoJSON(url){
+    const res = await fetch(url,{cache:"no-store"});
+    if(!res.ok) throw new Error(`Fetch failed: ${res.status} ${url}`);
+    return await res.json();
+  }
+
+  async function loadGeoJSONOptional(url){
+    try{
+      return await loadGeoJSON(url);
+    }catch(e){
+      return null;
+    }
+  }
+
   function looksLike27700(lng, lat){
     return Math.abs(lng) > 1000 || Math.abs(lat) > 1000;
   }
@@ -299,7 +324,71 @@
       strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:1, scale:6 };
   }
 
-  // ===== scoring UI helpers =====
+  // ===============================
+  // 4) SCORING MEANING (Equity/Penalty)
+  // ===============================
+  function computeEquityFromProps(props, fallbackMedianAge){
+    // priority 1: equity_proxy (already prepared by your join script)
+    const equityProxy = getProp(props, FIELD.equity_proxy, null);
+    if(equityProxy !== null) return num(equityProxy, 0);
+
+    // priority 2: wimd_norm (0..1, higher = more deprived)
+    const wimdNorm = getProp(props, FIELD.wimd_norm, null);
+    if(wimdNorm !== null) return num(wimdNorm, 0);
+
+    // priority 3: wimd_rank or decile -> convert to "higher = more deprived"
+    const r = num(getProp(props, FIELD.wimd_rank, NaN), NaN);
+    if(Number.isFinite(r)){
+      // we do not know the national max rank here; we will normalize across Cardiff LSOAs later anyway,
+      // so returning raw rank is okay, but we invert direction: smaller rank => higher equity.
+      // Use negative rank so that larger raw => "more deprived"
+      return -r;
+    }
+
+    const d = num(getProp(props, FIELD.wimd_decile, NaN), NaN);
+    if(Number.isFinite(d)){
+      // decile: 1 most deprived -> equity higher
+      return (11 - d) / 10;
+    }
+
+    // fallback: median age proxy (your old logic)
+    return Number.isFinite(fallbackMedianAge) ? fallbackMedianAge : 0;
+  }
+
+  function computePenaltyFromProps(props){
+    // priority 1: parking_constraint directly (0..1)
+    const pc = getProp(props, FIELD.parking_constraint, null);
+    if(pc !== null){
+      const v = pctTo01(pc);
+      if(Number.isFinite(v)) return v;
+    }
+
+    // priority 2: derive from shares (0..1)
+    const flats  = pctTo01(getProp(props, FIELD.share_flats, NaN));
+    const dense  = pctTo01(getProp(props, FIELD.share_dense, NaN));
+    const rented = pctTo01(getProp(props, FIELD.share_rented, NaN));
+    const nocar  = pctTo01(getProp(props, FIELD.share_no_car, NaN));
+
+    // If nothing exists, return 0 (no penalty)
+    const arr = [flats,dense,rented,nocar].filter(Number.isFinite);
+    if(arr.length === 0) return 0;
+
+    // Weighted sum (you can tune these):
+    // - flats/dense/rented are strongest "install/parking constraint"
+    // - no_car is weaker (adoption/priority proxy)
+    const wFlats = 0.40, wDense = 0.25, wRented = 0.25, wNoCar = 0.10;
+    const val =
+      (Number.isFinite(flats)  ? wFlats*flats  : 0) +
+      (Number.isFinite(dense)  ? wDense*dense  : 0) +
+      (Number.isFinite(rented) ? wRented*rented: 0) +
+      (Number.isFinite(nocar)  ? wNoCar*nocar  : 0);
+
+    return clamp01(val);
+  }
+
+  // ===============================
+  // 5) SCORING UI HELPERS
+  // ===============================
   function setScorePanelVisible(){
     const el = document.getElementById("scorePanel");
     if(!el) return;
@@ -315,7 +404,6 @@
     let we = weEl ? num(weEl.value, W.equity) : W.equity;
     let wp = wpEl ? num(wpEl.value, W.penalty) : W.penalty;
 
-    // normalize demand+equity to 1 (interpretability)
     const sumDE = wd + we;
     if(sumDE > 0){
       wd = wd / sumDE;
@@ -352,7 +440,7 @@
       scoreList.innerHTML =
         `<div class="item">
           <div class="itemTitle">No shortlist yet</div>
-          <div class="muted">Click <b>Run scenario</b> first, then come back to Scoring tab and adjust sliders.</div>
+          <div class="muted">Click <b>Run scenario</b> first, then adjust sliders.</div>
         </div>`;
       document.getElementById("k_davg").textContent = "–";
       document.getElementById("k_eavg").textContent = "–";
@@ -386,9 +474,9 @@
       const meta = document.createElement("div");
       meta.className = "itemMeta";
       meta.innerHTML = `
-        <span class="badge">D01 ${(c.d01*100).toFixed(0)}</span>
-        <span class="badge">E01 ${(c.e01*100).toFixed(0)}</span>
-        <span class="badge">P01 ${(c.p01*100).toFixed(0)}</span>
+        <span class="badge">D ${(c.d01*100).toFixed(0)}</span>
+        <span class="badge">E ${(c.e01*100).toFixed(0)}</span>
+        <span class="badge">P ${(c.p01*100).toFixed(0)}</span>
         <span class="badge">LSOA ${escapeHtml(c.lsoaCode || "n/a")}</span>
       `;
 
@@ -421,19 +509,14 @@
       div.appendChild(bars2);
       div.appendChild(bars3);
 
-      div.addEventListener("click", ()=>{
-        map.panTo({lat:c.lat, lng:c.lng});
-        map.setZoom(Math.max(map.getZoom(), 14));
-        info.setContent(buildCandidateInfoHtml(c, true));
-        info.setPosition({lat:c.lat, lng:c.lng});
-        info.open({map});
-      });
-
+      div.addEventListener("click", ()=> focusCandidate(c));
       scoreList.appendChild(div);
     });
   }
 
-  // ===== tabs & choropleth =====
+  // ===============================
+  // 6) TABS & CHOROPLETH
+  // ===============================
   function setTab(tab){
     activeTab = tab;
     document.getElementById("tabKpi").classList.toggle("active", tab==="kpi");
@@ -477,7 +560,9 @@
     }
   }
 
-  // --- build polygon index from raw GeoJSON ---
+  // ===============================
+  // 7) GEOMETRY HELPERS
+  // ===============================
   function makePolygonsFromGeometry(geom){
     const polys = [];
     if(!geom) return polys;
@@ -505,6 +590,13 @@
     return false;
   }
 
+  function joinPointToLSOA(latLng){
+    for(const rec of lsoaIndex){
+      if(containsAny(rec.polygons, latLng)) return rec;
+    }
+    return null;
+  }
+
   function normalize01(arr){
     let mn=Infinity, mx=-Infinity;
     for(const v of arr){
@@ -515,18 +607,14 @@
     return { norm: (x)=> (x-mn)/(mx-mn) };
   }
 
+  // ===============================
+  // 8) KPI / GAP
+  // ===============================
   function computeSupplyTotal(){
     let sum = 0;
     for(const p of supplyPts) sum += num(p.sockets, 0);
     if(sum === 0 && supplyPts.length) sum = supplyPts.length;
     return sum;
-  }
-
-  function joinPointToLSOA(latLng){
-    for(const rec of lsoaIndex){
-      if(containsAny(rec.polygons, latLng)) return rec;
-    }
-    return null;
   }
 
   function computeLSOAGapScores(){
@@ -561,6 +649,9 @@
     }
   }
 
+  // ===============================
+  // 9) SELECTION + UI LIST
+  // ===============================
   function updateSelectedLayer(){
     selectedLayer.forEach(ft=> selectedLayer.remove(ft));
     const fc = {
@@ -571,28 +662,46 @@
         properties:{
           rank:i+1,
           name:c.name||"Selected",
-          score:+c.score,
-          demand01:+c.d01,
-          equity01:+c.e01,
-          penalty01:+c.p01,
+          score:c.score,
+          demand01:c.d01,
+          equity01:c.e01,
+          penalty01:c.p01,
           lsoa:c.lsoaCode||"",
-          population: Number.isFinite(c.pop)? Math.round(c.pop): null,
-          median_age: Number.isFinite(c.medianAge)? +c.medianAge.toFixed(1): null,
-
-          // enriched extras (for transparency)
-          equity_raw: Number.isFinite(c.equityRaw)? +c.equityRaw : null,
-          penalty_raw: Number.isFinite(c.penaltyRaw)? +c.penaltyRaw : null,
-          parking_constraint: Number.isFinite(c.parkingConstraint)? +c.parkingConstraint.toFixed(4) : null,
-          share_flats: Number.isFinite(c.shareFlats)? +c.shareFlats.toFixed(4) : null,
-          share_dense_housing: Number.isFinite(c.shareDense)? +c.shareDense.toFixed(4) : null,
-          share_rented: Number.isFinite(c.shareRented)? +c.shareRented.toFixed(4) : null,
-          share_no_car: Number.isFinite(c.shareNoCar)? +c.shareNoCar.toFixed(4) : null,
-          wimd_rank: Number.isFinite(c.wimdRank)? +c.wimdRank : null,
-          wimd_decile: c.wimdDecile ?? null
+          population: c.pop ?? null,
+          median_age: c.medianAge ?? null
         }
       }))
     };
     selectedLayer.addGeoJson(fc);
+  }
+
+  function focusCandidate(c){
+    map.panTo({lat:c.lat, lng:c.lng});
+    map.setZoom(Math.max(map.getZoom(), 14));
+
+    const pct = (x)=> Number.isFinite(x) ? Math.round(x*100) : null;
+
+    // show key proxies if available
+    const badges = [];
+    if(Number.isFinite(c.parking_constraint)) badges.push(`parking_constraint ${c.parking_constraint.toFixed(2)}`);
+    if(Number.isFinite(c.share_flats)) badges.push(`share_flats ${Math.round(c.share_flats*100)}%`);
+    if(Number.isFinite(c.share_dense)) badges.push(`share_dense ${Math.round(c.share_dense*100)}%`);
+    if(Number.isFinite(c.share_rented)) badges.push(`share_rented ${Math.round(c.share_rented*100)}%`);
+    if(Number.isFinite(c.share_no_car)) badges.push(`share_no_car ${Math.round(c.share_no_car*100)}%`);
+    if(Number.isFinite(c.wimd_rank)) badges.push(`wimd_rank ${Math.round(c.wimd_rank)}`);
+    if(Number.isFinite(c.wimd_decile)) badges.push(`wimd_decile ${Math.round(c.wimd_decile)}`);
+
+    info.setContent(
+      `<b>${escapeHtml(c.name||"Selected")}</b><br/>` +
+      `Score: ${escapeHtml(c.score.toFixed(3))}<br/>` +
+      `Demand: ${pct(c.d01)} | Equity: ${pct(c.e01)} | Penalty: ${pct(c.p01)}<br/>` +
+      `LSOA: ${escapeHtml(c.lsoaCode||"n/a")}<br/>` +
+      `Population: ${Number.isFinite(c.pop)? Math.round(c.pop): "n/a"}<br/>` +
+      `Median age: ${Number.isFinite(c.medianAge)? c.medianAge.toFixed(1): "n/a"}<br/>` +
+      (badges.length ? `<div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">${badges.map(b=>`<span class="badge">${escapeHtml(b)}</span>`).join("")}</div>` : "")
+    );
+    info.setPosition({lat:c.lat, lng:c.lng});
+    info.open({map});
   }
 
   function renderList(){
@@ -618,66 +727,26 @@
       t.className="itemTitle";
       t.textContent = `${idx+1}. ${c.name || "Candidate"}`;
 
+      // show some proxies in the list (nice for demos)
+      const metaBadges = [];
+      metaBadges.push(`<span class="badge">Score: ${escapeHtml(c.score.toFixed(3))}</span>`);
+      metaBadges.push(`<span class="badge">D ${Math.round(c.d01*100)}</span>`);
+      metaBadges.push(`<span class="badge">E ${Math.round(c.e01*100)}</span>`);
+      metaBadges.push(`<span class="badge">P ${Math.round(c.p01*100)}</span>`);
+      metaBadges.push(`<span class="badge">LSOA: ${escapeHtml(c.lsoaCode || "n/a")}</span>`);
+      if(Number.isFinite(c.parking_constraint)) metaBadges.push(`<span class="badge">ParkC: ${c.parking_constraint.toFixed(2)}</span>`);
+      if(Number.isFinite(c.share_no_car)) metaBadges.push(`<span class="badge">NoCar: ${Math.round(c.share_no_car*100)}%</span>`);
+
       const m = document.createElement("div");
       m.className="itemMeta";
-      m.innerHTML = `
-        <span class="badge">Score: ${escapeHtml(c.score.toFixed(3))}</span>
-        <span class="badge">D ${(c.d01*100).toFixed(0)}</span>
-        <span class="badge">E ${(c.e01*100).toFixed(0)}</span>
-        <span class="badge">P ${(c.p01*100).toFixed(0)}</span>
-        <span class="badge">LSOA: ${escapeHtml(c.lsoaCode || "n/a")}</span>
-        <span class="badge">ParkC: ${Number.isFinite(c.parkingConstraint)? c.parkingConstraint.toFixed(2): "n/a"}</span>
-        <span class="badge">NoCar: ${Number.isFinite(c.shareNoCar)? (c.shareNoCar*100).toFixed(0)+"%":"n/a"}</span>
-      `;
+      m.innerHTML = metaBadges.join("");
 
       div.appendChild(t);
       div.appendChild(m);
 
-      div.addEventListener("click", ()=>{
-        map.panTo({lat:c.lat, lng:c.lng});
-        map.setZoom(Math.max(map.getZoom(), 14));
-        info.setContent(buildCandidateInfoHtml(c, false));
-        info.setPosition({lat:c.lat, lng:c.lng});
-        info.open({map});
-      });
-
+      div.addEventListener("click", ()=> focusCandidate(c));
       list.appendChild(div);
     });
-  }
-
-  function buildCandidateInfoHtml(c, isScoreTab){
-    const pct = (x)=> Number.isFinite(x) ? (x*100).toFixed(0)+"%" : "n/a";
-    const v01 = (x)=> Number.isFinite(x) ? (x*100).toFixed(0) : "n/a";
-    const n2 = (x)=> Number.isFinite(x) ? x.toFixed(2) : "n/a";
-    const n3 = (x)=> Number.isFinite(x) ? x.toFixed(3) : "n/a";
-
-    let extra = `
-      <div style="margin-top:6px;">
-        <span class="badge">parking_constraint ${n2(c.parkingConstraint)}</span>
-        <span class="badge">share_flats ${pct(c.shareFlats)}</span>
-        <span class="badge">share_dense ${pct(c.shareDense)}</span>
-        <span class="badge">share_rented ${pct(c.shareRented)}</span>
-        <span class="badge">share_no_car ${pct(c.shareNoCar)}</span>
-        <span class="badge">wimd_rank ${Number.isFinite(c.wimdRank)? Math.round(c.wimdRank):"n/a"}</span>
-        <span class="badge">wimd_decile ${c.wimdDecile ?? "n/a"}</span>
-      </div>
-    `;
-
-    let contrib = isScoreTab ? `
-      <div style="margin-top:6px;">
-        Contrib: +${n3(c.contribDemand)} +${n3(c.contribEquity)} −${n3(c.contribPenalty)}
-      </div>` : "";
-
-    return `
-      <b>${escapeHtml(c.name||"Selected")}</b><br/>
-      Score: ${escapeHtml(c.score.toFixed(3))}<br/>
-      Demand: ${v01(c.d01)} | Equity: ${v01(c.e01)} | Penalty: ${v01(c.p01)}<br/>
-      LSOA: ${escapeHtml(c.lsoaCode||"n/a")}<br/>
-      Population: ${Number.isFinite(c.pop)? Math.round(c.pop): "n/a"}<br/>
-      Median age: ${Number.isFinite(c.medianAge)? c.medianAge.toFixed(1): "n/a"}<br/>
-      ${contrib}
-      ${extra}
-    `;
   }
 
   function downloadText(filename, text){
@@ -690,14 +759,8 @@
   }
 
   function exportCSV(){
-    const rows = [[
-      "rank","name","lat","lng","score","demand01","equity01","penalty01","lsoa",
-      "population","median_age",
-      "equity_raw","penalty_raw",
-      "parking_constraint","share_flats","share_dense_housing","share_rented","share_no_car",
-      "wimd_rank","wimd_decile"
-    ]];
-
+    const rows = [["rank","name","lat","lng","score","demand01","equity01","penalty01","lsoa","population","median_age",
+                   "parking_constraint","share_flats","share_dense","share_rented","share_no_car","wimd_rank","wimd_decile","wimd_norm"]];
     selected.forEach((c,i)=>{
       rows.push([
         i+1,
@@ -711,20 +774,16 @@
         c.lsoaCode||"",
         Number.isFinite(c.pop)? Math.round(c.pop): "",
         Number.isFinite(c.medianAge)? c.medianAge: "",
-
-        Number.isFinite(c.equityRaw)? c.equityRaw: "",
-        Number.isFinite(c.penaltyRaw)? c.penaltyRaw: "",
-
-        Number.isFinite(c.parkingConstraint)? c.parkingConstraint: "",
-        Number.isFinite(c.shareFlats)? c.shareFlats: "",
-        Number.isFinite(c.shareDense)? c.shareDense: "",
-        Number.isFinite(c.shareRented)? c.shareRented: "",
-        Number.isFinite(c.shareNoCar)? c.shareNoCar: "",
-        Number.isFinite(c.wimdRank)? c.wimdRank: "",
-        (c.wimdDecile ?? "")
+        Number.isFinite(c.parking_constraint)? c.parking_constraint.toFixed(4): "",
+        Number.isFinite(c.share_flats)? c.share_flats.toFixed(4): "",
+        Number.isFinite(c.share_dense)? c.share_dense.toFixed(4): "",
+        Number.isFinite(c.share_rented)? c.share_rented.toFixed(4): "",
+        Number.isFinite(c.share_no_car)? c.share_no_car.toFixed(4): "",
+        Number.isFinite(c.wimd_rank)? Math.round(c.wimd_rank): "",
+        Number.isFinite(c.wimd_decile)? Math.round(c.wimd_decile): "",
+        Number.isFinite(c.wimd_norm)? c.wimd_norm.toFixed(6): ""
       ]);
     });
-
     const csv = rows.map(r=> r.map(x=> `"${x}"`).join(",")).join("\n");
     downloadText("planner_shortlist.csv", csv);
   }
@@ -746,28 +805,23 @@
           population: Number.isFinite(c.pop)? Math.round(c.pop): null,
           median_age: Number.isFinite(c.medianAge)? +c.medianAge.toFixed(1): null,
 
-          equity_raw: Number.isFinite(c.equityRaw)? +c.equityRaw : null,
-          penalty_raw: Number.isFinite(c.penaltyRaw)? +c.penaltyRaw : null,
-          parking_constraint: Number.isFinite(c.parkingConstraint)? +c.parkingConstraint.toFixed(4) : null,
-          share_flats: Number.isFinite(c.shareFlats)? +c.shareFlats.toFixed(4) : null,
-          share_dense_housing: Number.isFinite(c.shareDense)? +c.shareDense.toFixed(4) : null,
-          share_rented: Number.isFinite(c.shareRented)? +c.shareRented.toFixed(4) : null,
-          share_no_car: Number.isFinite(c.shareNoCar)? +c.shareNoCar.toFixed(4) : null,
-          wimd_rank: Number.isFinite(c.wimdRank)? +c.wimdRank : null,
-          wimd_decile: c.wimdDecile ?? null
+          parking_constraint: Number.isFinite(c.parking_constraint)? +c.parking_constraint.toFixed(4): null,
+          share_flats: Number.isFinite(c.share_flats)? +c.share_flats.toFixed(4): null,
+          share_dense: Number.isFinite(c.share_dense)? +c.share_dense.toFixed(4): null,
+          share_rented: Number.isFinite(c.share_rented)? +c.share_rented.toFixed(4): null,
+          share_no_car: Number.isFinite(c.share_no_car)? +c.share_no_car.toFixed(4): null,
+          wimd_rank: Number.isFinite(c.wimd_rank)? Math.round(c.wimd_rank): null,
+          wimd_decile: Number.isFinite(c.wimd_decile)? Math.round(c.wimd_decile): null,
+          wimd_norm: Number.isFinite(c.wimd_norm)? +c.wimd_norm.toFixed(6): null
         }
       }))
     };
     downloadText("planner_shortlist.geojson", JSON.stringify(fc, null, 2));
   }
 
-  // ===== penalty hook (optional future extension) =====
-  // Right now we use LSOA parking_constraint (already 0-1).
-  // If you want "too close to existing chargers" as penalty:
-  // - compute nearest supply distance (km) for each candidate
-  // - penaltyRaw = 1/(dist+eps) or clamp into [0,1]
-  // Keep for later if you need.
-
+  // ===============================
+  // 10) SCENARIO RUN (TOP P)
+  // ===============================
   function runScenario(){
     const P = Math.max(1, Math.floor(num(document.getElementById("pSel").value, 10)));
     const year = String(document.getElementById("yearSel").value || "2030");
@@ -785,12 +839,10 @@
       return;
     }
 
-    // normalize components
     const dN = normalize01(candPts.map(c=>c.demandRaw));
     const eN = normalize01(candPts.map(c=>c.equityRaw));
     const pN = normalize01(candPts.map(c=>c.penaltyRaw));
 
-    // weights (from sliders)
     const { wd, we, wp } = getWeights();
 
     for(const c of candPts){
@@ -821,13 +873,17 @@
     if(activeTab === "score") renderScoreTab();
 
     setStatus(
-      `Scenario done.\nYear=${year}, target=${Math.round(target)}, supply=${Math.round(supplyTotal)}, gap=${Math.round(gap)}.\n` +
+      `Scenario done.\n` +
+      `Year=${year}, target=${Math.round(target)}, supply=${Math.round(supplyTotal)}, gap=${Math.round(gap)}.\n` +
       `Candidates=${candPts.length}, selected Top ${selected.length}.\n` +
-      `Scoring uses enriched equity_proxy/wimd + parking_constraint penalty.\n` +
+      `Demand(population) + Equity(WIMD) - Penalty(parking_constraint/proxies).\n` +
       `Switch to "Gap map" tab for underserved areas.`
     );
   }
 
+  // ===============================
+  // 11) MAP INIT
+  // ===============================
   async function initMap(){
     map = new google.maps.Map(document.getElementById("map"), {
       center:{lat:51.4816,lng:-3.1791},
@@ -836,14 +892,14 @@
     });
     info = new google.maps.InfoWindow();
 
-    // layers
     supplyLayer   = new google.maps.Data({map});
     lsoaLayer     = new google.maps.Data({map});
     candLayer     = new google.maps.Data({map});
     selectedLayer = new google.maps.Data({map});
     solutionLayer = new google.maps.Data({map});
 
-    supplyLayer.setStyle(()=>({ icon: iconCircle("#2563eb", 7, 3), zIndex: 800 }));
+    // Make existing chargers more visible (bigger radius + thicker white stroke)
+    supplyLayer.setStyle(()=>({ icon: iconCircle("#2563eb", 8, 4), zIndex: 800 }));
     candLayer.setStyle(()=>({ icon: iconCircle("#f59e0b", 6, 2), zIndex: 700 }));
     selectedLayer.setStyle(()=>({ icon: iconStar("#ef4444"), zIndex: 9999 }));
     solutionLayer.setStyle(()=>({ icon: iconTriangle("#7c3aed"), zIndex: 850 }));
@@ -852,12 +908,21 @@
     setScorePanelVisible();
     updateWeightUI();
 
+    // Hide p10 UI if disabled
+    if(!ENABLE_P10_OVERLAY){
+      const wrap = document.getElementById("ckSolutionWrap");
+      if(wrap) wrap.style.display = "none";
+    }
+
     // UI toggles
     document.getElementById("ckSupply").addEventListener("change",(e)=> supplyLayer.setMap(e.target.checked? map:null));
     document.getElementById("ckLSOA").addEventListener("change",(e)=> lsoaLayer.setMap(e.target.checked? map:null));
     document.getElementById("ckCandidates").addEventListener("change",(e)=> candLayer.setMap(e.target.checked? map:null));
     document.getElementById("ckSelected").addEventListener("change",(e)=> selectedLayer.setMap(e.target.checked? map:null));
-    document.getElementById("ckSolution").addEventListener("change",(e)=> solutionLayer.setMap(e.target.checked? map:null));
+    const ckSol = document.getElementById("ckSolution");
+    if(ckSol){
+      ckSol.addEventListener("change",(e)=> solutionLayer.setMap(e.target.checked? map:null));
+    }
 
     document.getElementById("tabKpi").addEventListener("click",()=>setTab("kpi"));
     document.getElementById("tabGap").addEventListener("click",()=>setTab("gap"));
@@ -874,9 +939,7 @@
       if(!el) return;
       el.addEventListener("input", ()=>{
         updateWeightUI();
-        if(Array.isArray(candPts) && candPts.length > 0){
-          runScenario();
-        }
+        if(Array.isArray(candPts) && candPts.length > 0) runScenario();
       });
     }
     hookSlider("wDemand");
@@ -886,69 +949,58 @@
     try{
       setStatus("Loading GeoJSON…");
 
-      const [supply, lsoa, candidates, solution] = await Promise.all([
+      const [supply, lsoa, candidates] = await Promise.all([
         loadGeoJSON(DATA_URLS.supply),
         loadGeoJSON(DATA_URLS.lsoa),
-        loadGeoJSON(DATA_URLS.candidates),
-        loadGeoJSON(DATA_URLS.solution).catch(()=>null)
+        loadGeoJSON(DATA_URLS.candidates)
       ]);
 
-      // draw layers
+      const solution = ENABLE_P10_OVERLAY ? await loadGeoJSONOptional(DATA_URLS.solution) : null;
+
       supplyLayer.addGeoJson(supply);
       lsoaLayer.addGeoJson(lsoa);
       candLayer.addGeoJson(candidates);
       if(solution) solutionLayer.addGeoJson(solution);
+      if(!ENABLE_P10_OVERLAY) solutionLayer.setMap(null);
 
-      // build LSOA index from enriched geojson polygons (for join)
+      // build LSOA index from enriched geojson polygons
       lsoaIndex = (lsoa.features||[]).map((f)=>{
         const props = f.properties || {};
-        const code = String(getProp(props, FIELD.code, "LSOA")).trim();
+        const code = getProp(props, FIELD.code, "LSOA");
 
+        // Demand raw: population preferred
         const pop  = num(getProp(props, FIELD.pop, null), NaN);
         const demandRaw = Number.isFinite(pop) ? pop : num(getProp(props, FIELD.demand, 1), 1);
 
-        const equityRaw = num(getProp(props, FIELD.equity, null), NaN);
-        const penaltyRaw = num(getProp(props, FIELD.penalty, null), NaN);
-
+        // Equity raw: WIMD preferred
         const medAge = num(getProp(props, FIELD.median_age, null), NaN);
+        const equityRaw = computeEquityFromProps(props, medAge);
 
-        // extra enriched fields
-        const parkingConstraint = num(getProp(props, ["parking_constraint"], null), NaN);
-        const shareFlats = num(getProp(props, ["share_flats"], null), NaN);
-        const shareDense = num(getProp(props, ["share_dense_housing"], null), NaN);
-        const shareRented = num(getProp(props, ["share_rented"], null), NaN);
-        const shareNoCar = num(getProp(props, ["share_no_car"], null), NaN);
-        const wimdRank = num(getProp(props, ["wimd_rank"], null), NaN);
-        const wimdDecile = getProp(props, ["wimd_decile"], null);
+        // Penalty raw: parking_constraint or derived shares
+        const penaltyRaw = computePenaltyFromProps(props);
+
+        // Store useful proxies for popups/list
+        const wimd_norm   = num(getProp(props, FIELD.wimd_norm, NaN), NaN);
+        const wimd_rank   = num(getProp(props, FIELD.wimd_rank, NaN), NaN);
+        const wimd_decile = num(getProp(props, FIELD.wimd_decile, NaN), NaN);
+
+        const parking_constraint = pctTo01(getProp(props, FIELD.parking_constraint, NaN));
+        const share_flats  = pctTo01(getProp(props, FIELD.share_flats, NaN));
+        const share_dense  = pctTo01(getProp(props, FIELD.share_dense, NaN));
+        const share_rented = pctTo01(getProp(props, FIELD.share_rented, NaN));
+        const share_no_car = pctTo01(getProp(props, FIELD.share_no_car, NaN));
 
         const polygons = makePolygonsFromGeometry(f.geometry);
 
-        // if equityRaw missing entirely, fallback to median_age (last resort)
-        let eq = equityRaw;
-        if(!Number.isFinite(eq)){
-          eq = Number.isFinite(medAge) ? medAge : 0;
-        }
-
-        // if penaltyRaw missing, fallback to parking_constraint (should exist), else 0
-        let pen = penaltyRaw;
-        if(!Number.isFinite(pen)){
-          pen = Number.isFinite(parkingConstraint) ? parkingConstraint : 0;
-        }
-
         return {
           code,
-          demandRaw,
-          equityRaw: eq,
-          penaltyRaw: pen,
           pop,
           medianAge: medAge,
-          parkingConstraint,
-          shareFlats,
-          shareDense,
-          shareRented,
-          shareNoCar,
-          wimdRank,
-          wimdDecile,
+          demandRaw,
+          equityRaw,
+          penaltyRaw,
+          wimd_norm, wimd_rank, wimd_decile,
+          parking_constraint, share_flats, share_dense, share_rented, share_no_car,
           polygons,
           feature: null,
           supplyRaw: 0
@@ -965,9 +1017,8 @@
           lsoa11cd: ft.getProperty("lsoa11cd"),
           code: ft.getProperty("code"),
           id: ft.getProperty("id"),
-          _lsoa_code: ft.getProperty("_lsoa_code")
         };
-        const code = String(getProp(propsLike, FIELD.code, "") || "").trim();
+        const code = getProp(propsLike, FIELD.code, null);
         if(code && lsoaByCode.has(code)){
           const rec = lsoaByCode.get(code);
           rec.feature = ft;
@@ -987,7 +1038,7 @@
         supplyPts.push({lat,lng,sockets: sockets || 1});
       }
 
-      // candidate cache + join to LSOA (inherit enriched equity/penalty)
+      // candidate cache + join to enriched LSOA (inherit demand/equity/penalty + proxies)
       candPts = [];
       for(const f of (candidates.features||[])){
         if(!f.geometry || f.geometry.type!=="Point") continue;
@@ -1010,21 +1061,19 @@
 
         candPts.push({
           lat,lng,name,
-          demandRaw,
-          equityRaw,
-          penaltyRaw,
-          lsoaCode: rec? rec.code : "",
-          pop,
-          medianAge,
+          demandRaw, equityRaw, penaltyRaw,
+          lsoaCode: rec ? rec.code : "",
+          pop, medianAge,
 
-          // enriched extras for display/export
-          parkingConstraint: rec ? num(rec.parkingConstraint, NaN) : NaN,
-          shareFlats: rec ? num(rec.shareFlats, NaN) : NaN,
-          shareDense: rec ? num(rec.shareDense, NaN) : NaN,
-          shareRented: rec ? num(rec.shareRented, NaN) : NaN,
-          shareNoCar: rec ? num(rec.shareNoCar, NaN) : NaN,
-          wimdRank: rec ? num(rec.wimdRank, NaN) : NaN,
-          wimdDecile: rec ? rec.wimdDecile : null
+          // proxies for info window / export
+          wimd_norm: rec ? rec.wimd_norm : NaN,
+          wimd_rank: rec ? rec.wimd_rank : NaN,
+          wimd_decile: rec ? rec.wimd_decile : NaN,
+          parking_constraint: rec ? rec.parking_constraint : NaN,
+          share_flats: rec ? rec.share_flats : NaN,
+          share_dense: rec ? rec.share_dense : NaN,
+          share_rented: rec ? rec.share_rented : NaN,
+          share_no_car: rec ? rec.share_no_car : NaN
         });
       }
 
@@ -1040,13 +1089,10 @@
       setStatus(
         `Loaded.\n` +
         `Supply points: ${supplyPts.length}\n` +
-        `LSOA polygons: ${(lsoa.features||[]).length}\n` +
+        `LSOA polygons (enriched): ${(lsoa.features||[]).length}\n` +
         `Candidates: ${candPts.length}\n` +
-        `Solution overlay (p10): ${(solution && solution.features)? solution.features.length : 0}\n\n` +
-        `LSOA enriched fields used:\n` +
-        `  Equity: equity_proxy / wimd_norm (fallbacks)\n` +
-        `  Penalty: parking_constraint\n\n` +
-        `Next: Run scenario (Top P) → then go to Scoring tab.`
+        `p10 overlay: ${ENABLE_P10_OVERLAY && solution ? "loaded" : "disabled"}\n\n` +
+        `Next: Run scenario (Top P) → then open Scoring tab.`
       );
 
     } catch(err){
@@ -1060,7 +1106,8 @@
 
   (function loadGoogleMaps(){
     const s = document.createElement("script");
-    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GMAPS_KEY)}&callback=initMap&v=weekly&libraries=geometry`;
+    // add loading=async to reduce the warning
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GMAPS_KEY)}&callback=initMap&v=weekly&libraries=geometry&loading=async`;
     s.async = true; s.defer = true;
     document.head.appendChild(s);
   })();
