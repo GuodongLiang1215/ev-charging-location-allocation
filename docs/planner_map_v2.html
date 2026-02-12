@@ -294,6 +294,12 @@
   const CARDIFF_BOUNDS = { north: 51.566, south: 51.410, east: -3.065, west: -3.333 };
   const TARGET_BY_YEAR = { "2026": 700, "2030": 1500, "2035": 2000 };
 
+  // Manual-run gating:
+  // - never auto-run on page load
+  // - sliders/settings can auto-rerun ONLY after first click Run (Both), if enabled
+  let hasRun = false;
+  const AUTO_RERUN_AFTER_FIRST_RUN = true;
+
   // ===============================
   // 1) FIELD MAPS
   // ===============================
@@ -575,6 +581,13 @@
       rec.gap01 = g;
       rec.feature.setProperty("_gapScore", g);
     }
+
+    // keep candPts gapRaw in sync (important when you change year/filters later)
+    for(const c of candPts){
+      const ll = new google.maps.LatLng(c.lat, c.lng);
+      const rec = joinPointToLSOA(ll);
+      c.gapRaw = rec ? num(rec.gap01, 0) : 0;
+    }
   }
 
   // ===============================
@@ -646,7 +659,6 @@
   // 11) SHARED SCORING (for both methods)
   // ===============================
   function scoreCandidatesShared(){
-    // Normalize benefit components over all candidates
     const dN = normalize01(candPts.map(c => c.demandRaw));
     const eN = normalize01(candPts.map(c => c.equityRaw));
     const gN = normalize01(candPts.map(c => c.gapRaw));
@@ -674,7 +686,9 @@
       c.costCluster01 = 0;
 
       c.benefit = w.wd*c.d01 + w.we*c.e01 + w.wg*c.g01;
-      c.costBase = clamp01(w.wp*c.costConstr01 + w.wn*c.costNear01); // cluster later
+
+      // Note: do NOT clamp here (keeps objective smoother); clamp only at the end
+      c.costBase = (w.wp*c.costConstr01 + w.wn*c.costNear01);
       c.scoreBase = c.benefit - c.costBase;
       c.score = c.scoreBase;
     }
@@ -709,9 +723,10 @@
       }
       c.minDistToSelectedM = Number.isFinite(bestD) ? bestD : NaN;
       c.costCluster01 = (selectedList.length<=1 || !Number.isFinite(bestD)) ? 0 : clamp01(1 - (bestD / minSpacingM));
-      const costFull = clamp01(c.costBase + w.wc*c.costCluster01);
-      c.cost = costFull;
-      c.score = c.benefit - costFull;
+
+      const costFullRaw = c.costBase + w.wc*c.costCluster01;
+      c.cost = clamp01(costFullRaw);
+      c.score = c.benefit - c.cost;
     }
   }
 
@@ -733,7 +748,6 @@
           const trial = picked.concat([c]);
           if(violatesSpread(trial)) continue;
 
-          // quick eval: prefer high scoreBase & lower redundancy
           const red = redundancyAvgNearestSelected(trial);
           const obj = (c.scoreBase) + 0.0001*(Number.isFinite(red)? red : 0);
           if(obj > bestScore){ bestScore = obj; bestIdx = i; }
@@ -747,7 +761,6 @@
       return picked;
     }
 
-    // rank
     const picked = candPts.slice().sort((a,b)=> b.scoreBase - a.scoreBase).slice(0, P);
     applyClusterCosts(picked);
     picked.sort((a,b)=> b.score - a.score);
@@ -775,17 +788,16 @@
   }
 
   function crossover(a, b, P){
-    // set-based union then sample
     const pool = [];
     const seen = new Set();
     for(const x of a){ if(!seen.has(x)){ pool.push(x); seen.add(x);} }
     for(const x of b){ if(!seen.has(x)){ pool.push(x); seen.add(x);} }
 
-    // shuffle
     for(let i=pool.length-1;i>0;i--){
       const j = randInt(i+1);
       [pool[i], pool[j]] = [pool[j], pool[i]];
     }
+
     const child = [];
     for(const x of pool){
       if(child.length >= P) break;
@@ -793,7 +805,7 @@
       if(violatesSpread(trial)) continue;
       child.push(x);
     }
-    // if not enough, fill random
+
     if(child.length < P){
       const fill = makeRandomSolution(P);
       for(const x of fill){
@@ -822,28 +834,24 @@
         break;
       }
     }
-    // ensure size P
     return out.slice(0,P);
   }
 
   function objectiveValue(sol){
-    // Objective variants:
-    // - score: mean(score)
-    // - cov:   coverage + mean(score)
-    // - cov_red: coverage + mean(score) - redundancyPenalty
     applyClusterCosts(sol);
 
     const mode = document.getElementById("gaObjective").value || "score";
     const cov = computeCoverageDemand(sol).covW;
     const meanScore = sol.reduce((a,b)=>a+num(b.score,0),0)/Math.max(1,sol.length);
 
-    // redundancy penalty: normalize by D
     const R = getServiceRadiusM();
     const red = redundancyAvgNearestSelected(sol);
-    const red01 = Number.isFinite(red) ? clamp01(1 - (red / Math.max(1, R))) : 1; // small red -> high penalty
+    const red01 = Number.isFinite(red) ? clamp01(1 - (red / Math.max(1, R))) : 1;
 
-    if(mode === "cov_red") return (0.55*cov + 0.45*clamp01((meanScore+1)/2)) - 0.25*red01;
-    if(mode === "cov")     return (0.60*cov + 0.40*clamp01((meanScore+1)/2));
+    const meanScore01 = clamp01((meanScore + 1) / 2);
+
+    if(mode === "cov_red") return (0.55*cov + 0.45*meanScore01) - 0.25*red01;
+    if(mode === "cov")     return (0.60*cov + 0.40*meanScore01);
     return meanScore;
   }
 
@@ -853,7 +861,6 @@
     const mutRate = clamp01(num(document.getElementById("gaMut").value, 0.25));
     const eliteRate = Math.max(0, Math.min(0.5, num(document.getElementById("gaElite").value, 0.10)));
 
-    // init population
     let pop = [];
     for(let i=0;i<popSize;i++) pop.push(makeRandomSolution(P));
 
@@ -861,7 +868,6 @@
     let bestObj = -Infinity;
 
     for(let g=0; g<gens; g++){
-      // evaluate
       const scored = pop.map(sol => ({ sol, obj: objectiveValue(sol) }))
                         .sort((a,b)=> b.obj - a.obj);
 
@@ -872,7 +878,6 @@
 
       const elites = scored.slice(0, Math.max(1, Math.floor(eliteRate*popSize))).map(x=>x.sol);
 
-      // selection (tournament)
       function pickOne(){
         const k = 4;
         let best = null;
@@ -926,23 +931,6 @@
     layer.addGeoJson(fc);
   }
 
-  function focusCandidate(c){
-    map.panTo({lat:c.lat, lng:c.lng});
-    map.setZoom(Math.max(map.getZoom(), 14));
-
-    const pct = x => Number.isFinite(x) ? Math.round(x*100) : "n/a";
-    info.setContent(
-      "<b>" + escapeHtml(c.name||"Selected") + "</b><br/>" +
-      "Score: " + escapeHtml((c.score??0).toFixed(3)) + "<br/>" +
-      "Demand: " + pct(c.d01) + " | Equity: " + pct(c.e01) + " | Gap: " + pct(c.g01) + "<br/>" +
-      "Cost(Constr/Near/Cluster): " + pct(c.costConstr01) + " / " + pct(c.costNear01) + " / " + pct(c.costCluster01) + "<br/>" +
-      "LSOA: " + escapeHtml(c.lsoaCode||"n/a") + "<br/>" +
-      "Dist to existing: " + (Number.isFinite(c.distToExistingM)? Math.round(c.distToExistingM) + "m" : "n/a")
-    );
-    info.setPosition({lat:c.lat, lng:c.lng});
-    info.open({map});
-  }
-
   function renderCompareList(){
     const el = document.getElementById("compareList");
     const badge = document.getElementById("countBadge");
@@ -980,9 +968,11 @@
       row.appendChild(title);
       row.appendChild(meta);
 
-      row.addEventListener("click", ()=>{
-        // prefer focusing GA if exists, else LSOA
-        focusCandidate(right || left);
+      row.addEventListener("click", ()=> {
+        const c = right || left;
+        if(!c) return;
+        map.panTo({lat:c.lat, lng:c.lng});
+        map.setZoom(Math.max(map.getZoom(), 14));
       });
 
       el.appendChild(row);
@@ -1064,27 +1054,20 @@
       return;
     }
 
-    // recompute gap, dist-to-existing, and scores
     computeLSOAGapScores();
     computeDistancesToExisting();
     scoreCandidatesShared();
     updateWeightUI();
 
-    // baseline
     selectedLSOA = runBaselineLSOA(P);
-
-    // GA
     selectedGA = runGA(P);
 
-    // push to map layers
     setPlanLayer(lsoaPlanLayer, selectedLSOA, "LSOA");
     setPlanLayer(gaPlanLayer, selectedGA, "GA");
 
-    // toggles
     lsoaPlanLayer.setMap(document.getElementById("ckLSOAPlan").checked ? map : null);
     gaPlanLayer.setMap(document.getElementById("ckGAPlan").checked ? map : null);
 
-    // KPIs
     const covA = computeCoverageDemand(selectedLSOA);
     const covB = computeCoverageDemand(selectedGA);
 
@@ -1099,8 +1082,8 @@
 
     document.getElementById("k_cov_lsoa").textContent = (covA.covW*100).toFixed(0) + "%";
     document.getElementById("k_cov_ga").textContent   = (covB.covW*100).toFixed(0) + "%";
-    document.getElementById("k_savg_lsoa").textContent = savgA.toFixed(3);
-    document.getElementById("k_savg_ga").textContent   = savgB.toFixed(3);
+    document.getElementById("k_savg_lsoa").textContent = Number.isFinite(savgA) ? savgA.toFixed(3) : "–";
+    document.getElementById("k_savg_ga").textContent   = Number.isFinite(savgB) ? savgB.toFixed(3) : "–";
     document.getElementById("k_dexist_lsoa").textContent = Number.isFinite(dexA) ? String(Math.round(dexA)) : "–";
     document.getElementById("k_dexist_ga").textContent   = Number.isFinite(dexB) ? String(Math.round(dexB)) : "–";
     document.getElementById("k_red_lsoa").textContent = Number.isFinite(redA) ? String(Math.round(redA)) : "–";
@@ -1158,12 +1141,11 @@
       return { icon: iconDiamond("#7c3aed", hov ? 1.25 : 1.05), zIndex: 9998 };
     });
 
-    // hover events
+    // hover/click events
     function addHover(layer){
       layer.addListener("mouseover", e => e.feature.setProperty("_hover", true));
       layer.addListener("mouseout",  e => e.feature.setProperty("_hover", false));
       layer.addListener("click", e => {
-        // try read from properties (for plan layers), else ignore
         const lat = e.feature.getGeometry().get().lat();
         const lng = e.feature.getGeometry().get().lng();
         info.setContent(
@@ -1197,7 +1179,12 @@
     document.getElementById("tabGap").addEventListener("click", ()=> setTab("gap"));
     document.getElementById("tabCompare").addEventListener("click", ()=> setTab("compare"));
 
-    document.getElementById("btnRun").addEventListener("click", runBoth);
+    // IMPORTANT: only run when button clicked
+    document.getElementById("btnRun").addEventListener("click", ()=> {
+      hasRun = true;
+      runBoth();
+    });
+
     document.getElementById("btnPrint").addEventListener("click", ()=> window.print());
 
     document.getElementById("btnExportCsvLSOA").addEventListener("click", ()=> exportCSV(selectedLSOA, "planner_lsoa.csv"));
@@ -1205,17 +1192,19 @@
     document.getElementById("btnExportCsvGA").addEventListener("click", ()=> exportCSV(selectedGA, "planner_ga.csv"));
     document.getElementById("btnExportGeoGA").addEventListener("click", ()=> exportGeoJSON(selectedGA, "planner_ga.geojson"));
 
-    // Auto rerun when sliders/settings change (if data loaded)
-    function hookRerun(id, evtName){
+    // Change handlers: update UI always; rerun only after first Run (Both) if enabled
+    function maybeRerun(){
+      updateWeightUI();
+      if(AUTO_RERUN_AFTER_FIRST_RUN && hasRun && candPts.length) runBoth();
+    }
+    function hook(id, evt){
       const el = document.getElementById(id);
       if(!el) return;
-      el.addEventListener(evtName || "input", ()=>{
-        updateWeightUI();
-        if(candPts.length) runBoth();
-      });
+      el.addEventListener(evt, maybeRerun);
     }
-    ["wDemand","wEquity","wGap","wPenalty","wNear","wCluster"].forEach(id => hookRerun(id, "input"));
-    ["svcKm","minSpacing","ckSpread","selMode","gaPop","gaGen","gaMut","gaElite","gaObjective","yearSel","pSel"].forEach(id => hookRerun(id, "change"));
+
+    ["wDemand","wEquity","wGap","wPenalty","wNear","wCluster"].forEach(id => hook(id, "input"));
+    ["svcKm","minSpacing","ckSpread","selMode","gaPop","gaGen","gaMut","gaElite","gaObjective","yearSel","pSel"].forEach(id => hook(id, "change"));
 
     try{
       setStatus("Loading GeoJSON…");
@@ -1242,7 +1231,6 @@
         const equityRaw = computeEquityFromProps(props, medAge);
 
         const penaltyRaw = computePenaltyFromProps(props);
-
         const polygons = makePolygonsFromGeometry(f.geometry);
 
         return {
@@ -1287,9 +1275,6 @@
         supplyPts.push({lat, lng, sockets: (sockets || 1)});
       }
 
-      // gap scores
-      computeLSOAGapScores();
-
       // candidate cache + join to LSOA
       candPts = [];
       for(const f of (candidates.features||[])){
@@ -1311,7 +1296,7 @@
           demandRaw: rec ? num(rec.demandRaw, 1) : 1,
           equityRaw: rec ? num(rec.equityRaw, 0) : 0,
           penaltyRaw: rec ? num(rec.penaltyRaw, 0) : 0,
-          gapRaw: rec ? num(rec.gap01, 0) : 0,
+          gapRaw: 0,
 
           distToExistingM: NaN,
           d01:0, e01:0, g01:0,
@@ -1321,13 +1306,23 @@
         });
       }
 
-      // initial KPI text
+      // gap scores (also sync candPts gapRaw)
+      computeLSOAGapScores();
+      styleLSOA();
+
+      // initial KPI text (NO auto run)
       const year = String(document.getElementById("yearSel").value || "2030");
       const supplyTotal = computeSupplyTotal();
       document.getElementById("k_supply").textContent = String(Math.round(supplyTotal));
       document.getElementById("k_target").textContent = String(Math.round(num(TARGET_BY_YEAR[year], 1500)));
       document.getElementById("k_gap").textContent = "–";
       document.getElementById("k_candidates").textContent = String(candPts.length);
+
+      // disable exports until run
+      document.getElementById("btnExportCsvLSOA").disabled = true;
+      document.getElementById("btnExportGeoLSOA").disabled = true;
+      document.getElementById("btnExportCsvGA").disabled = true;
+      document.getElementById("btnExportGeoGA").disabled = true;
 
       map.fitBounds(CARDIFF_BOUNDS);
 
@@ -1336,11 +1331,9 @@
         "Supply points: " + supplyPts.length + "\n" +
         "LSOA polygons: " + (lsoa.features||[]).length + "\n" +
         "Candidates: " + candPts.length + "\n\n" +
-        "Next: Run (Both) → compare KPIs & shortlists."
+        "Click \"Run (Both)\" to generate the two plans.\n" +
+        (AUTO_RERUN_AFTER_FIRST_RUN ? "After first run, sliders will auto-update the plans." : "Sliders will not auto-run; click Run each time.")
       );
-
-      // initial run
-      runBoth();
 
     } catch(err){
       console.error(err);
