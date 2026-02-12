@@ -7,7 +7,6 @@
   <style>
     html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
     #map { height: 100%; width: 100%; }
-    /* IMPORTANT: prevent global CSS from breaking Google tiles */
     #map img { max-width: none !important; }
 
     .panel{
@@ -60,6 +59,9 @@
       border:1px solid #e5e7eb; font-size:12px; color:#111827;
       background:#fff;
     }
+    .badge.clickable{ cursor:pointer; user-select:none; }
+    .badge.clickable:hover{ background:#f1f5f9; }
+
     .legend{ margin-top:10px; font-size:12px; line-height:1.35; }
     .swatch{ display:inline-block; width:12px; height:12px; border-radius:999px; margin-right:8px; border:2px solid rgba(255,255,255,0.9); box-shadow:0 0 0 1px rgba(0,0,0,0.12); }
   </style>
@@ -111,6 +113,15 @@
         </div>
       </div>
 
+      <!-- ✅ Quick navigation Top 1–3 -->
+      <div class="row" id="quickNavRow" style="display:none; margin-top:6px; gap:8px;">
+        <span class="small" style="font-weight:700;">Quick nav:</span>
+        <span class="badge clickable" id="quickNav1">Go #1</span>
+        <span class="badge clickable" id="quickNav2">Go #2</span>
+        <span class="badge clickable" id="quickNav3">Go #3</span>
+        <span class="muted" id="quickNavHint" style="margin-left:auto;"></span>
+      </div>
+
       <div class="muted" id="emptyHint">No results yet. Set origin (search / my location / click map) → Recommend.</div>
       <div class="list" id="resultList" style="display:none;"></div>
     </div>
@@ -119,7 +130,8 @@
 
     <div class="legend">
       <b>Legend</b><br/>
-      <div><span class="swatch" style="background:#2563eb;"></span>Blue dots: existing chargers (bigger + thick white outline; hover to highlight)</div>
+      <div><span class="swatch" style="background:#2563eb;"></span>Blue dots: existing chargers</div>
+      <div><span class="swatch" style="background:#ef4444;"></span>Red star: your origin (search / my location / click)</div>
       <div><span class="swatch" style="background:#ef4444; clip-path: polygon(50% 0%, 0% 100%, 100% 100%); border-radius:2px;"></span>Red triangles: planned sites (optional / planner layer)</div>
       <div class="muted" style="margin-top:6px;">Note: demand centroids are planning-only layers → keep them in Planner view by default.</div>
     </div>
@@ -136,10 +148,12 @@
       planned:new URL("data/processed/new_sites_p10.geojson", BASE).href // optional
     };
 
-    // Cardiff bounds (fallback)
     const CARDIFF_BOUNDS = { north: 51.566, south: 51.410, east: -3.065, west: -3.333 };
 
-    // Globals
+    // ✅ UX: origin set 后自动 recommend + 自动预览 Top1 路线
+    const AUTO_RECOMMEND_ON_ORIGIN = true;
+    const AUTO_PREVIEW_TOP1_ROUTE = true;
+
     let map, info;
     let trafficLayer, lsoaLayer, supplyLayer, plannedLayer;
     let originMarker = null;
@@ -149,13 +163,14 @@
     let directionsRenderer = null;
     let distanceMatrixService = null;
 
-    // supply cache: [{lat,lng,name,id,props}]
     let supplyPoints = [];
     let plannedPoints = [];
 
-    // UI state
     let sortMode = "eta"; // "eta" | "dist" | "bal"
     let lastResults = [];
+
+    // quick nav state
+    let lastTopList = [];
 
     function setStatus(msg) {
       document.getElementById("status").textContent = msg || "";
@@ -181,14 +196,24 @@
 
     function applyMapRestriction(locked) {
       if (locked) {
-        map.setOptions({
-          restriction: { latLngBounds: CARDIFF_BOUNDS, strictBounds: true }
-        });
-        // keep view in Cardiff
+        map.setOptions({ restriction: { latLngBounds: CARDIFF_BOUNDS, strictBounds: true } });
         map.fitBounds(CARDIFF_BOUNDS);
       } else {
         map.setOptions({ restriction: null });
       }
+    }
+
+    // ✅ 红色星标 icon（替代黑点）
+    function originStarIcon() {
+      return {
+        path: "M 0,-10 L 2,-3 L 10,-3 L 4,1 L 6,9 L 0,4 L -6,9 L -4,1 L -10,-3 L -2,-3 Z",
+        fillColor: "#ef4444",
+        fillOpacity: 0.95,
+        strokeColor: "#ffffff",
+        strokeOpacity: 1,
+        strokeWeight: 2,
+        scale: 1.4
+      };
     }
 
     function setOrigin(latLng, label) {
@@ -199,25 +224,29 @@
           position: latLng,
           map,
           title: "Origin",
-          icon: {
-            path: google.maps.SymbolPath.CIRCLE,
-            fillColor: "#111827",
-            fillOpacity: 1,
-            strokeColor: "#ffffff",
-            strokeWeight: 3,
-            scale: 8
-          },
+          icon: originStarIcon(),      // ✅ here
           zIndex: 999999
         });
       } else {
         originMarker.setPosition(latLng);
+        originMarker.setIcon(originStarIcon()); // ✅ ensure updated
         originMarker.setMap(map);
       }
 
       map.panTo(latLng);
-
       document.getElementById("btnRecommend").disabled = false;
-      setStatus(`Origin set: ${label || (latLng.toUrlValue ? latLng.toUrlValue(5) : "")}\nClick "Recommend" to rank chargers by traffic-aware ETA.`);
+
+      setStatus(
+        `Origin set: ${label || (latLng.toUrlValue ? latLng.toUrlValue(5) : "")}\n` +
+        `Auto-recommend is ${AUTO_RECOMMEND_ON_ORIGIN ? "ON" : "OFF"}.`
+      );
+
+      // ✅ origin 设置后自动推荐（你想要“搜索后直接出列表”）
+      if (AUTO_RECOMMEND_ON_ORIGIN && supplyPoints.length > 0) {
+        recommend().catch((e)=> {
+          console.warn(e);
+        });
+      }
     }
 
     // Haversine distance (meters)
@@ -234,8 +263,6 @@
     }
 
     // ---------- Places API (New) Text Search (New) ----------
-    // Uses: POST https://places.googleapis.com/v1/places:searchText
-    // Doc: Text Search (New) :contentReference[oaicite:1]{index=1}
     async function placesTextSearch(query, useBiasCardiff = true) {
       const body = {
         textQuery: query,
@@ -272,7 +299,7 @@
       return (data.places || []);
     }
 
-    // ---------- Visual styles (after google is ready) ----------
+    // ---------- Visual styles ----------
     function supplyIcon(scale, strokeW, fill = "#2563eb") {
       return {
         path: google.maps.SymbolPath.CIRCLE,
@@ -298,14 +325,8 @@
     }
 
     function initSupplyLayerStyles() {
-      supplyLayer.setStyle((feature) => {
-        return {
-          icon: supplyIcon(9, 4),
-          zIndex: 1000
-        };
-      });
+      supplyLayer.setStyle(() => ({ icon: supplyIcon(9, 4), zIndex: 1000 }));
 
-      // hover highlight
       supplyLayer.addListener("mouseover", (e) => {
         supplyLayer.overrideStyle(e.feature, { icon: supplyIcon(12, 5, "#1d4ed8"), zIndex: 9999 });
         const name = e.feature.getProperty("name") || "Charger";
@@ -319,10 +340,9 @@
         info.close();
       });
 
-      // click: set destination preview
       supplyLayer.addListener("click", (e) => {
         const name = e.feature.getProperty("name") || "Charger";
-        info.setContent(`<b>${escapeHtml(name)}</b><br/>Click "Recommend" to compare ETAs from your origin.`);
+        info.setContent(`<b>${escapeHtml(name)}</b><br/>Tip: use the list below to preview route or open navigation.`);
         info.setPosition(e.latLng);
         info.open({ map });
       });
@@ -344,14 +364,15 @@
         ...p,
         crowMeters: haversineMeters(origin, p)
       }));
-      scored.sort((a,b) => a.crowMeters - b.crowMeters);
-      // optionally filter within 12km, else fallback to top N
+      scored.sort((a,b) => => a.crowMeters - b.crowMeters);
+
       const within = scored.filter(x => x.crowMeters <= 12000);
       const pick = (within.length >= 8 ? within : scored).slice(0, maxN);
       return pick;
     }
 
     function km(m) { return (m/1000).toFixed(1); }
+
     function fmtSec(s) {
       if (!isFinite(s) || s < 0) return "n/a";
       const m = Math.round(s/60);
@@ -362,18 +383,14 @@
     }
 
     function scoreBalanced(item) {
-      // Balanced = ETA + distance + (optional) charging power
-      // Transparent rule: lower is better
       const etaMin = item.etaTrafficSec / 60;
       const distKm = item.distanceMeters / 1000;
-      const power = Number(item.power_kw || item.power || 0); // if you have it in your geojson
-      const powerBonus = power > 0 ? (50 / Math.min(350, Math.max(50, power))) : 1.0; // ~1.0–2.0
+      const power = Number(item.power_kw || item.power || 0);
+      const powerBonus = power > 0 ? (50 / Math.min(350, Math.max(50, power))) : 1.0;
       return (etaMin * 1.0 + distKm * 1.5) * powerBonus;
     }
 
     async function computeMatrixDistance(origin, candidates) {
-      // Use legacy DistanceMatrixService (most stable inside Maps JS).
-      // If your project hasn't enabled Distance Matrix API, this will fail and we will show a helpful message.
       return new Promise((resolve, reject) => {
         const destLatLngs = candidates.map(c => new google.maps.LatLng(c.lat, c.lng));
 
@@ -416,8 +433,9 @@
           "ETA ranking failed.\n" +
           String(e) + "\n\n" +
           "Fix:\n" +
-          "1) Ensure Distance Matrix API + Directions API are enabled for this key/project.\n" +
-          "2) Ensure billing is enabled and key restrictions include your domain.\n"
+          "1) Enable Distance Matrix API + Directions API.\n" +
+          "2) Billing enabled.\n" +
+          "3) Key referrer restriction includes your domain.\n"
         );
         return;
       }
@@ -429,7 +447,7 @@
 
         const dist = el.distance?.value ?? NaN;
         const dur = el.duration?.value ?? NaN;
-        const durT = el.duration_in_traffic?.value ?? dur; // fallback
+        const durT = el.duration_in_traffic?.value ?? dur;
         results.push({
           ...candidates[i],
           distanceMeters: dist,
@@ -439,12 +457,11 @@
         });
       }
 
-      // store and sort according to current mode
       lastResults = results.slice();
       applySortingAndRender();
 
       const t1 = performance.now();
-      setStatus(`Done in ${(t1 - t0).toFixed(0)} ms. Showing Top 5 (traffic-aware ETA).`);
+      setStatus(`Done in ${(t1 - t0).toFixed(0)} ms. Top list is ready (click Quick nav / list items).`);
     }
 
     function applySortingAndRender() {
@@ -456,6 +473,13 @@
 
       const top5 = items.slice(0, 5);
       renderList(top5);
+      updateQuickNav(top5);
+
+      // ✅ 默认预览 Top1 路线（不自动打开新窗口）
+      if (AUTO_PREVIEW_TOP1_ROUTE && top5.length > 0) {
+        drawRouteTo(top5[0]);
+        focusItem(top5[0], 0, true);
+      }
     }
 
     function openNavigation(origin, dest) {
@@ -468,8 +492,6 @@
     function drawRouteTo(dest) {
       if (!originLatLng) return;
 
-      // Draw route preview (legacy DirectionsService).
-      // If Directions API isn't enabled, we'll still allow "Open in Google Maps" as a fallback.
       directionsService.route({
         origin: originLatLng,
         destination: new google.maps.LatLng(dest.lat, dest.lng),
@@ -480,11 +502,63 @@
         }
       }, (res, status) => {
         if (status !== "OK" || !res) {
-          setStatus("Route preview failed: " + status + "\nYou can still click 'Open navigation' in the list.");
+          setStatus("Route preview failed: " + status + "\nYou can still use 'Open navigation'.");
           return;
         }
         directionsRenderer.setDirections(res);
       });
+    }
+
+    function focusItem(it, idx, silent=false) {
+      map.panTo({ lat: it.lat, lng: it.lng });
+      map.setZoom(Math.max(map.getZoom(), 14));
+      if (!silent) drawRouteTo(it);
+
+      info.setContent(
+        `<b>${escapeHtml(it.name || "Charger")}</b><br/>` +
+        `ETA: ${escapeHtml(fmtSec(it.etaTrafficSec))}<br/>` +
+        `Distance: ${escapeHtml(isFinite(it.distanceMeters) ? km(it.distanceMeters) + " km" : "n/a")}`
+      );
+      info.setPosition({ lat: it.lat, lng: it.lng });
+      info.open({ map });
+    }
+
+    // ✅ Quick nav 1–3
+    function updateQuickNav(items) {
+      const row = document.getElementById("quickNavRow");
+      const b1 = document.getElementById("quickNav1");
+      const b2 = document.getElementById("quickNav2");
+      const b3 = document.getElementById("quickNav3");
+      const hint = document.getElementById("quickNavHint");
+
+      lastTopList = items.slice();
+
+      if (!originLatLng || items.length === 0) {
+        row.style.display = "none";
+        return;
+      }
+
+      row.style.display = "flex";
+
+      const setBtn = (btn, i) => {
+        if (items[i]) {
+          btn.style.opacity = "1";
+          btn.style.pointerEvents = "auto";
+          btn.textContent = `Go #${i+1}`;
+          btn.onclick = () => openNavigation(originLatLng, items[i]);
+        } else {
+          btn.style.opacity = "0.4";
+          btn.style.pointerEvents = "none";
+          btn.textContent = `Go #${i+1}`;
+          btn.onclick = null;
+        }
+      };
+
+      setBtn(b1, 0);
+      setBtn(b2, 1);
+      setBtn(b3, 2);
+
+      hint.textContent = "Tip: preview route auto-selects #1";
     }
 
     function renderList(items) {
@@ -529,8 +603,8 @@
         actions.className = "itemMeta";
         actions.style.marginTop = "6px";
         actions.innerHTML = `
-          <span class="badge" style="cursor:pointer;">Route preview</span>
-          <span class="badge" style="cursor:pointer;">Open navigation</span>
+          <span class="badge clickable">Route preview</span>
+          <span class="badge clickable">Open navigation</span>
         `;
 
         const [btnPreview, btnNav] = actions.querySelectorAll(".badge");
@@ -538,6 +612,7 @@
         btnPreview.addEventListener("click", (ev) => {
           ev.stopPropagation();
           drawRouteTo(it);
+          focusItem(it, idx, true);
         });
         btnNav.addEventListener("click", (ev) => {
           ev.stopPropagation();
@@ -549,13 +624,7 @@
         div.appendChild(actions);
 
         div.addEventListener("click", () => {
-          // focus and preview
-          map.panTo({ lat: it.lat, lng: it.lng });
-          map.setZoom(Math.max(map.getZoom(), 14));
-          drawRouteTo(it);
-          info.setContent(`<b>${escapeHtml(it.name || "Charger")}</b><br/>ETA: ${escapeHtml(fmtSec(it.etaTrafficSec))}<br/>Distance: ${escapeHtml(isFinite(it.distanceMeters)? km(it.distanceMeters)+" km":"n/a")}`);
-          info.setPosition({ lat: it.lat, lng: it.lng });
-          info.open({ map });
+          focusItem(it, idx, false);
         });
 
         list.appendChild(div);
@@ -585,7 +654,6 @@
 
       info = new google.maps.InfoWindow();
 
-      // Layers
       trafficLayer = new google.maps.TrafficLayer();
       trafficLayer.setMap(map);
 
@@ -597,39 +665,26 @@
         strokeOpacity: 0.9,
         strokeWeight: 2
       });
-      lsoaLayer.setMap(null); // default OFF
+      lsoaLayer.setMap(null);
 
       supplyLayer = new google.maps.Data();
       supplyLayer.setMap(map);
 
       plannedLayer = new google.maps.Data();
-      plannedLayer.setMap(null); // default OFF
+      plannedLayer.setMap(null);
 
       initSupplyLayerStyles();
       initPlannedLayerStyles();
 
-      // Services
       directionsService = new google.maps.DirectionsService();
       directionsRenderer = new google.maps.DirectionsRenderer({ map, suppressMarkers: true, preserveViewport: true });
       distanceMatrixService = new google.maps.DistanceMatrixService();
 
-      // UI events
-      document.getElementById("ckTraffic").addEventListener("change", (e) => {
-        trafficLayer.setMap(e.target.checked ? map : null);
-      });
-      document.getElementById("ckSupply").addEventListener("change", (e) => {
-        supplyLayer.setMap(e.target.checked ? map : null);
-      });
-      document.getElementById("ckLSOA").addEventListener("change", (e) => {
-        lsoaLayer.setMap(e.target.checked ? map : null);
-      });
-      document.getElementById("ckPlanned").addEventListener("change", (e) => {
-        plannedLayer.setMap(e.target.checked ? map : null);
-      });
-
-      document.getElementById("ckUnlock").addEventListener("change", (e) => {
-        applyMapRestriction(!e.target.checked);
-      });
+      document.getElementById("ckTraffic").addEventListener("change", (e) => trafficLayer.setMap(e.target.checked ? map : null));
+      document.getElementById("ckSupply").addEventListener("change", (e) => supplyLayer.setMap(e.target.checked ? map : null));
+      document.getElementById("ckLSOA").addEventListener("change", (e) => lsoaLayer.setMap(e.target.checked ? map : null));
+      document.getElementById("ckPlanned").addEventListener("change", (e) => plannedLayer.setMap(e.target.checked ? map : null));
+      document.getElementById("ckUnlock").addEventListener("change", (e) => applyMapRestriction(!e.target.checked));
 
       document.getElementById("sortEta").addEventListener("click", () => setSort("eta"));
       document.getElementById("sortDist").addEventListener("click", () => setSort("dist"));
@@ -649,14 +704,13 @@
             }
             setOrigin(ll, "My location");
           },
-          (err) => {
+          () => {
             setStatus("Geolocation denied/unavailable. You can click on the map to set origin (fallback).");
           },
           { enableHighAccuracy: true, timeout: 8000 }
         );
       });
 
-      // Fallback: click map to set origin
       map.addListener("click", (e) => {
         const unlocked = document.getElementById("ckUnlock").checked;
         if (!unlocked && !inCardiff(e.latLng)) {
@@ -666,7 +720,11 @@
         setOrigin(e.latLng, "Clicked on map");
       });
 
-      // Search button (Places API New: Text Search New)
+      // ✅ Enter key triggers search
+      document.getElementById("searchInput").addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") document.getElementById("btnSearch").click();
+      });
+
       document.getElementById("btnSearch").addEventListener("click", async () => {
         const q = (document.getElementById("searchInput").value || "").trim();
         if (!q) return;
@@ -681,7 +739,6 @@
             return;
           }
 
-          // pick best result
           const p = places[0];
           const loc = p.location;
           const ll = new google.maps.LatLng(loc.latitude, loc.longitude);
@@ -698,9 +755,9 @@
           setStatus(
             "Search failed.\n" + String(err) + "\n\n" +
             "Fix:\n" +
-            "1) Ensure Places API (New) is enabled for this project.\n" +
-            "2) Ensure your API key allows requests from this domain (HTTP referrer restriction).\n" +
-            "3) Billing must be enabled.\n"
+            "1) Places API (New) enabled.\n" +
+            "2) Key referrer restriction includes your domain.\n" +
+            "3) Billing enabled.\n"
           );
         }
       });
@@ -712,12 +769,12 @@
         const [supply, lsoa, planned] = await Promise.all([
           loadGeoJSON(DATA_URLS.supply),
           loadGeoJSON(DATA_URLS.lsoa),
-          loadGeoJSON(DATA_URLS.planned).catch(() => null) // optional
+          loadGeoJSON(DATA_URLS.planned).catch(() => null)
         ]);
 
-        // supply → Data layer + cache array
         supplyLayer.addGeoJson(supply);
         supplyPoints = [];
+
         for (const f of (supply.features || [])) {
           if (!f.geometry || f.geometry.type !== "Point") continue;
           const [lng, lat] = f.geometry.coordinates || [];
@@ -735,15 +792,10 @@
             power_kw: props.power_kw || props.power || props.max_kw || 0,
             props
           });
-
-          // write readable name into feature property for hover
-          // (Data layer already has the feature; we can set on the layer side too)
         }
 
-        // Make sure features have "name"
         supplyLayer.forEach((feature) => {
           if (!feature.getProperty("name")) {
-            // Try infer from known keys (if your geojson has them)
             const candidate =
               feature.getProperty("operator") ||
               feature.getProperty("location") ||
@@ -755,24 +807,19 @@
           }
         });
 
-        // LSOA boundary optional
         lsoaLayer.addGeoJson(lsoa);
 
-        // Planned sites optional (OFF by default)
-        if (planned) {
-          plannedLayer.addGeoJson(planned);
-          plannedPoints = [];
-        }
+        if (planned) plannedLayer.addGeoJson(planned);
 
-        // Fit to Cardiff bounds
         map.fitBounds(CARDIFF_BOUNDS);
         setStatus(
           `Loaded.\n` +
           `Existing chargers: ${supplyPoints.length}\n` +
           `LSOA polygons: ${(lsoa.features||[]).length}\n` +
           `Planned sites: ${(planned && planned.features)? planned.features.length : 0}\n\n` +
-          `Set origin → Recommend (Top 5 by traffic-aware ETA).`
+          `Search / My location / Click map → auto recommend (Top 5 by traffic-aware ETA).`
         );
+
       } catch (err) {
         console.error(err);
         setStatus("FAILED.\n" + String(err));
@@ -780,12 +827,12 @@
       }
     }
 
-    // Important: callback must be global
     window.initMap = initMap;
 
     (function loadGoogleMaps() {
       const s = document.createElement("script");
-      s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GMAPS_KEY)}&callback=initMap&v=weekly`;
+      // ✅ add loading=async to reduce console warning
+      s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GMAPS_KEY)}&callback=initMap&v=weekly&loading=async`;
       s.async = true;
       s.defer = true;
       document.head.appendChild(s);
