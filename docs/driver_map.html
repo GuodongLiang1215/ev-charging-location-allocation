@@ -364,7 +364,7 @@
         ...p,
         crowMeters: haversineMeters(origin, p)
       }));
-      scored.sort((a,b) => => a.crowMeters - b.crowMeters);
+      scored.sort((a,b) => a.crowMeters - b.crowMeters);
 
       const within = scored.filter(x => x.crowMeters <= 12000);
       const pick = (within.length >= 8 ? within : scored).slice(0, maxN);
