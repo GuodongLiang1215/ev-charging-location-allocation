@@ -1,0 +1,1903 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Cardiff EV Charging – Planner View (v2)</title>
+  <style>
+    html, body { height:100%; margin:0; font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    #map { height:100%; width:100%; }
+    #map img { max-width:none !important; }
+
+    .panel{
+      position:absolute; top:12px; left:12px; z-index:5;
+      background:rgba(255,255,255,0.96);
+      border:1px solid #ddd; border-radius:14px;
+      padding:12px; width:520px;
+      box-shadow:0 4px 18px rgba(0,0,0,0.12);
+      max-height: calc(100vh - 24px);
+      overflow:auto;
+    }
+    .title{ font-weight:900; font-size:20px; margin:0 0 10px; }
+    .row{ display:flex; align-items:center; gap:10px; margin:8px 0; flex-wrap:wrap; }
+    .small{ color:#374151; font-size:12px; }
+    .muted{ color:#6b7280; font-size:12px; }
+    .btn{
+      background:#111827; color:#fff; border:none; border-radius:10px;
+      padding:10px 12px; cursor:pointer; font-size:13px; font-weight:900;
+    }
+    .btn.secondary{ background:#6b7280; }
+    .btn:disabled{ opacity:0.5; cursor:not-allowed; }
+
+    .input, select{
+      border:1px solid #e5e7eb; border-radius:10px;
+      padding:10px 12px; outline:none; font-size:13px; background:#fff;
+    }
+
+    .kpis{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:8px; }
+    .card{ border:1px solid #eee; border-radius:12px; padding:10px 12px; background:#fff; }
+    .card .h{ font-size:12px; color:#6b7280; margin-bottom:6px; }
+    .card .v{ font-size:18px; font-weight:900; color:#111827; }
+
+    .section{ margin-top:10px; padding-top:10px; border-top:1px solid #eee; }
+    .pill{
+      display:inline-flex; align-items:center;
+      border:1px solid #e5e7eb; border-radius:999px;
+      padding:6px 10px; font-size:12px; background:#fff;
+      cursor:pointer;
+    }
+    .pill.active{ background:#111827; color:#fff; border-color:#111827; }
+
+    .list{ margin-top:8px; max-height:240px; overflow:auto; border:1px solid #eee; border-radius:12px; background:#fff; }
+    .item{ padding:10px 12px; border-bottom:1px solid #f1f5f9; cursor:pointer; }
+    .item:hover{ background:#f8fafc; }
+    .item:last-child{ border-bottom:none; }
+    .itemTitle{ font-weight:900; font-size:13px; margin-bottom:4px; }
+    .itemMeta{ font-size:12px; color:#374151; display:flex; gap:10px; flex-wrap:wrap; }
+    .badge{
+      display:inline-flex; align-items:center;
+      padding:2px 8px; border-radius:999px;
+      border:1px solid #e5e7eb; font-size:12px; color:#111827;
+      background:#fff;
+    }
+
+    .status{ margin-top:8px; font-size:12px; color:#111827; white-space:pre-wrap; }
+    .legend{ margin-top:10px; font-size:12px; line-height:1.35; }
+    .swatch{ display:inline-block; width:12px; height:12px; border-radius:999px; margin-right:8px; border:2px solid rgba(255,255,255,0.9); box-shadow:0 0 0 1px rgba(0,0,0,0.12); }
+
+    /* scoring bars */
+    .barRow{ display:flex; align-items:center; gap:10px; margin-top:6px; }
+    .barTrack{ flex:1; height:10px; border-radius:999px; background:#eef2ff; overflow:hidden; border:1px solid #e5e7eb; }
+    .barFill{ height:100%; }
+    .tiny{ font-size:11px; color:#6b7280; }
+    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    details summary{ cursor:pointer; font-weight:800; }
+  </style>
+</head>
+
+<body>
+<div id="map"></div>
+
+<div class="panel">
+  <div class="title">Planner view (Cardiff) – v2 (coverage + connectivity + zones)</div>
+  <div class="muted">
+    Data: existing chargers (OCM) + LSOA boundary (enriched) + demand centroids (candidates).<br/>
+    Note: open via local server (e.g. <span class="mono">python -m http.server</span>) so <span class="mono">fetch()</span> works.
+  </div>
+
+  <div class="section">
+    <div style="font-weight:900; margin-bottom:6px;">Scenario (Top P) + model</div>
+
+    <div class="row">
+      <label class="small">Target year</label>
+      <select id="yearSel">
+        <option value="2026">2026</option>
+        <option value="2030" selected>2030</option>
+        <option value="2035">2035</option>
+      </select>
+
+      <label class="small">Add P</label>
+      <input id="pSel" class="input" style="width:90px" type="number" min="1" value="10"/>
+
+      <button id="btnRun" class="btn">Run scenario</button>
+    </div>
+
+    <div class="row">
+      <span class="pill active" id="tabKpi">KPIs</span>
+      <span class="pill" id="tabGap">Gap map</span>
+      <span class="pill" id="tabScore">Scoring</span>
+    </div>
+
+    <div class="row">
+      <label class="small"><input id="ckSupply" type="checkbox" checked> Existing chargers</label>
+      <label class="small"><input id="ckLSOA" type="checkbox" checked> LSOA boundary</label>
+      <label class="small"><input id="ckCandidates" type="checkbox" checked> Candidates</label>
+      <label class="small"><input id="ckSelected" type="checkbox" checked> Selected (Top P)</label>
+      <span id="ckSolutionWrap" style="display:none;">
+        <label class="small"><input id="ckSolution" type="checkbox"> p10 overlay</label>
+      </span>
+    </div>
+
+    <div class="row">
+      <button id="btnExportCsv" class="btn secondary" disabled>Export shortlist (CSV)</button>
+      <button id="btnExportGeo" class="btn secondary" disabled>Export shortlist (GeoJSON)</button>
+      <button id="btnPrint" class="btn secondary">Print</button>
+    </div>
+
+    <div class="muted">
+      <b>Score (transparent)</b><br/>
+      <span class="mono" id="scoreFormulaInline">–</span><br/>
+      v2 adds two planning controls:
+      (1) <b>Coverage</b> marginal gain (demand-weighted) within service radius Dcov; (2) <b>Connectivity</b> of selected network within Dnet (soft/hard).<br/>
+      Demand can be derived as <span class="mono">kWh/day</span> via population & adoption params (editable below).
+    </div>
+
+    <details style="margin-top:8px;">
+      <summary class="small">Advanced options (coverage radius, connectivity, selection, demand model)</summary>
+
+      <div class="row" style="margin-top:10px;">
+        <label class="small" style="min-width:160px;">Service radius Dcov (km)</label>
+        <input id="svcKm" class="input" style="width:90px" type="number" min="0.2" step="0.1" value="1.5"/>
+        <span class="muted">Used for coverage + underserved (gap).</span>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">Connectivity radius Dnet (km)</label>
+        <input id="netKm" class="input" style="width:90px" type="number" min="0.5" step="0.1" value="3.0"/>
+        <select id="connMode">
+          <option value="off">Connectivity: off</option>
+          <option value="soft" selected>Connectivity: soft bonus</option>
+          <option value="hard">Connectivity: hard constraint</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">Min spacing (m)</label>
+        <input id="minSpacing" class="input" style="width:90px" type="number" min="0" step="50" value="700"/>
+        <label class="small"><input id="ckSpread" type="checkbox" checked> enforce spread</label>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">Selection mode</label>
+        <select id="selMode">
+          <option value="rank">Rank by local score (baseline)</option>
+          <option value="greedy" selected>Greedy (local + marginal coverage + connectivity)</option>
+          <option value="zones">Zones (cluster to P zones → pick 1 per zone)</option>
+          <option value="evo">Evo refine (GA-lite swaps after greedy)</option>
+        </select>
+        <label class="small">Evo iters</label>
+        <input id="evoIters" class="input" style="width:90px" type="number" min="0" step="50" value="300"/>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">Adoption (EV%)</label>
+        <input id="evPen" class="input" style="width:90px" type="number" min="0" max="100" step="0.5" value="10"/>
+        <label class="small">Daily km</label>
+        <input id="dailyKm" class="input" style="width:90px" type="number" min="1" step="1" value="40"/>
+        <label class="small">kWh/km</label>
+        <input id="kwhKm" class="input" style="width:90px" type="number" min="0.05" step="0.01" value="0.20"/>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">Public charging share</label>
+        <input id="publicShare" class="input" style="width:90px" type="number" min="0" max="1" step="0.05" value="0.35"/>
+        <label class="small">Station cap (kWh/day)</label>
+        <input id="capPerSite" class="input" style="width:110px" type="number" min="10" step="10" value="350"/>
+        <label class="small">α (local tolerance)</label>
+        <input id="alphaTol" class="input" style="width:90px" type="number" min="0.2" max="1" step="0.05" value="0.8"/>
+      </div>
+    </details>
+  </div>
+
+  <!-- Scoring tab panel -->
+  <div class="section" id="scorePanel" style="display:none;">
+    <div style="font-weight:900; margin-bottom:6px;">Scoring breakdown</div>
+
+    <div class="row">
+      <label class="small" style="min-width:120px;">Score mode</label>
+      <select id="scoreMode">
+        <option value="linear" selected>Linear (benefit − cost)</option>
+        <option value="ga">GA-style (benefit × affordability)</option>
+      </select>
+      <span class="badge mono" id="scoreFormula"></span>
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <label class="small" style="min-width:120px;">Demand weight</label>
+      <input id="wDemand" type="range" min="0" max="1" step="0.01" value="0.35" style="flex:1;">
+      <span class="badge" id="wDemandVal">0.35</span>
+    </div>
+
+    <div class="row">
+      <label class="small" style="min-width:120px;">Equity weight</label>
+      <input id="wEquity" type="range" min="0" max="1" step="0.01" value="0.25" style="flex:1;">
+      <span class="badge" id="wEquityVal">0.25</span>
+    </div>
+
+    <div class="row">
+      <label class="small" style="min-width:120px;">Underserved (gap)</label>
+      <input id="wGap" type="range" min="0" max="1" step="0.01" value="0.20" style="flex:1;">
+      <span class="badge" id="wGapVal">0.20</span>
+    </div>
+
+    <div class="row">
+      <label class="small" style="min-width:120px;">Coverage gain</label>
+      <input id="wCover" type="range" min="0" max="1" step="0.01" value="0.30" style="flex:1;">
+      <span class="badge" id="wCoverVal">0.30</span>
+    </div>
+
+    <div class="row">
+      <label class="small" style="min-width:120px;">Constraint cost</label>
+      <input id="wPenalty" type="range" min="0" max="1" step="0.01" value="0.22" style="flex:1;">
+      <span class="badge" id="wPenaltyVal">0.22</span>
+    </div>
+
+    <div class="row">
+      <label class="small" style="min-width:120px;">Near-existing</label>
+      <input id="wNear" type="range" min="0" max="1" step="0.01" value="0.18" style="flex:1;">
+      <span class="badge" id="wNearVal">0.18</span>
+    </div>
+
+    <div class="row">
+      <label class="small" style="min-width:120px;">Cluster/spread</label>
+      <input id="wCluster" type="range" min="0" max="1" step="0.01" value="0.22" style="flex:1;">
+      <span class="badge" id="wClusterVal">0.22</span>
+    </div>
+
+    <div class="row">
+      <label class="small" style="min-width:120px;">Connectivity</label>
+      <input id="wConn" type="range" min="0" max="1" step="0.01" value="0.18" style="flex:1;">
+      <span class="badge" id="wConnVal">0.18</span>
+    </div>
+
+    <div class="muted" style="margin-top:6px;">
+      Notes:
+      <ul style="margin:6px 0 0 18px; padding:0;">
+        <li>Benefit is normalized to 0–1 (Demand/Equity/Gap/CoverGain are comparable).</li>
+        <li>Coverage gain is marginal demand-weighted coverage added by a candidate within Dcov.</li>
+        <li>Connectivity term rewards candidates that link into the current selected network within Dnet; hard mode enforces it.</li>
+      </ul>
+    </div>
+
+    <div class="kpis" style="margin-top:10px;">
+      <div class="card"><div class="h">Coverage (demand-weighted)</div><div class="v" id="k_cov">–</div></div>
+      <div class="card"><div class="h">Adequacy (α·Dcov capacity)</div><div class="v" id="k_adeq">–</div></div>
+      <div class="card"><div class="h">Network connected</div><div class="v" id="k_conn">–</div></div>
+      <div class="card"><div class="h">Avg dist to existing (m)</div><div class="v" id="k_dexist">–</div></div>
+    </div>
+
+    <div class="row" style="justify-content:space-between; margin-top:10px;">
+      <div style="font-weight:900;">Top P decomposition</div>
+      <span class="badge" id="scoreCountBadge">0</span>
+    </div>
+
+    <div class="list" id="scoreList"></div>
+  </div>
+
+  <div class="section">
+    <div style="font-weight:900; margin-bottom:6px;">Needs & gap dashboard</div>
+    <div class="kpis">
+      <div class="card"><div class="h">Current supply (sockets or points)</div><div class="v" id="k_supply">–</div></div>
+      <div class="card"><div class="h">Target sockets (year)</div><div class="v" id="k_target">–</div></div>
+      <div class="card"><div class="h">Gap (target - supply)</div><div class="v" id="k_gap">–</div></div>
+      <div class="card"><div class="h">Selected sites (Top P)</div><div class="v" id="k_selected">0</div></div>
+    </div>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="section">
+    <div class="row" style="justify-content:space-between;">
+      <div style="font-weight:900;">Shortlist (Top P)</div>
+      <span class="badge" id="countBadge">0</span>
+    </div>
+    <div class="muted" id="emptyHint">Run scenario to generate shortlist.</div>
+    <div class="list" id="resultList" style="display:none;"></div>
+  </div>
+
+  <div class="legend">
+    <b>Legend</b><br/>
+    <div><span class="swatch" style="background:#2563eb;"></span>Blue: existing chargers</div>
+    <div><span class="swatch" style="background:#f59e0b;"></span>Orange: candidate demand centroids</div>
+    <div><span class="swatch" style="background:#ef4444;"></span>Red star: selected (Top P)</div>
+    <div><span class="muted" style="margin-top:6px;">Gap map colors LSOA by high demand + low provision.</span></div>
+  </div>
+</div>
+
+<script>
+  // ===============================
+  // 0) CONFIG
+  // ===============================
+  // IMPORTANT: replace with your key
+  const GMAPS_KEY = "AIzaSyAUproFl8jRStUlFwOKbQ8yh2CjNJ_H2c4";
+
+  const ENABLE_P10_OVERLAY = false;
+  const BASE = new URL("./", window.location.href);
+
+  const DATA_URLS = {
+    supply:     new URL("data/processed/supply_chargers_ocm.geojson", BASE).href,
+    lsoa:       new URL("data/processed/demand_lsoa_cardiff_exact_pop_wgs84_enriched.geojson", BASE).href,
+    candidates: new URL("data/processed/demand_points_cardiff_exact_pop_wgs84.geojson", BASE).href,
+    solution:   new URL("data/processed/new_sites_p10.geojson", BASE).href
+  };
+
+  const CARDIFF_BOUNDS = { north: 51.566, south: 51.410, east: -3.065, west: -3.333 };
+  const TARGET_BY_YEAR = { "2026": 700, "2030": 1500, "2035": 2000 };
+
+  // (Optional) year-based defaults for EV penetration if user doesn't override
+  const EV_PEN_DEFAULT = { "2026": 3, "2030": 10, "2035": 20 };
+
+  // ===============================
+  // 1) FIELD MAPS
+  // ===============================
+  const FIELD = {
+    code:   ["LSOA21CD","lsoa21cd","LSOA11CD","lsoa11cd","code","id"],
+
+    pop:    ["population","pop","pop_total","Pop","total_pop","Total"],
+    demand: ["demand","demand_score","ev_owners","owners","weight"],
+
+    equity_proxy: ["equity_proxy","equity_wimd","equity_norm"],
+    wimd_norm:    ["wimd_norm","imd_norm","wimd2019_norm"],
+    wimd_rank:    ["wimd_rank","imd_rank","wimd2019_rank"],
+    wimd_decile:  ["wimd_decile","imd_decile","wimd2019_decile"],
+    median_age:   ["median_age","median age","Median age mid-2024","Median age mid-2023","Median age mid-2022"],
+
+    parking_constraint: ["parking_constraint","constraint","install_constraint"],
+    share_flats:  ["share_flats","pct_flats","flats_share"],
+    share_dense:  ["share_dense","pct_dense","dense_share","share_terraced","pct_terraced"],
+    share_rented: ["share_rented","pct_rented","rented_share"],
+    share_no_car: ["share_no_car","pct_no_car","no_car_share"],
+
+    sockets:["sockets","SocketCount","socket_count","connectors","num_sockets","units"],
+    name:   ["name","operator","location","Site","address","Address"]
+  };
+
+  // ===============================
+  // 2) STATE
+  // ===============================
+  let map, info;
+  let supplyLayer, lsoaLayer, candLayer, selectedLayer, solutionLayer;
+
+  let lsoaIndex = [];   // enriched polygons
+  let supplyPts = [];
+  let candPts = [];
+  let selected = [];
+  let activeTab = "kpi";
+
+  // coverage index (rebuild when Dcov changes)
+  let coverSets = [];     // coverSets[i] = array of indices covered by candidate i within Dcov
+  let totalDemandW = 0;   // total demand weight across demand points (candPts used as demand nodes)
+  let distMat = null;     // optional distance matrix (meters) for candidates
+
+  // ===============================
+  // 3) UTILS
+  // ===============================
+  function setStatus(msg){ document.getElementById("status").textContent = msg || ""; }
+
+  function escapeHtml(s){
+    return String(s||"").replace(/[&<>"']/g, function(c){
+      return ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]);
+    });
+  }
+  function num(x, fb=0){ const v=Number(x); return Number.isFinite(v)? v: fb; }
+  function clamp01(x){ return Math.max(0, Math.min(1, x)); }
+
+  function pctTo01(x){
+    const v = num(x, NaN);
+    if(!Number.isFinite(v)) return NaN;
+    return (v > 1.0001) ? clamp01(v/100) : clamp01(v);
+  }
+
+  function getProp(props, keys, fb=null){
+    for(const k of keys){
+      if(props && props[k] !== undefined && props[k] !== null && props[k] !== "") return props[k];
+    }
+    return fb;
+  }
+
+  async function loadGeoJSON(url){
+    const res = await fetch(url,{cache:"no-store"});
+    if(!res.ok) throw new Error("Fetch failed: " + res.status + " " + url);
+    return await res.json();
+  }
+
+  async function loadGeoJSONOptional(url){
+    try{ return await loadGeoJSON(url); } catch(e){ return null; }
+  }
+
+  function looksLike27700(lng, lat){
+    return Math.abs(lng) > 1000 || Math.abs(lat) > 1000;
+  }
+
+  // Haversine (meters)
+  function distMeters(aLat, aLng, bLat, bLng){
+    const R = 6371000;
+    const toRad = (x)=> x * Math.PI / 180;
+    const dLat = toRad(bLat - aLat);
+    const dLng = toRad(bLng - aLng);
+    const s1 = Math.sin(dLat/2), s2 = Math.sin(dLng/2);
+    const q = s1*s1 + Math.cos(toRad(aLat))*Math.cos(toRad(bLat))*s2*s2;
+    return 2*R*Math.asin(Math.min(1, Math.sqrt(q)));
+  }
+
+  // --- symbols ---
+  function iconCircle(fill, scale, strokeW){
+    return { path: google.maps.SymbolPath.CIRCLE, fillColor:fill, fillOpacity:1,
+      strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:strokeW, scale: scale };
+  }
+  function iconStar(fill, scale){
+    return { path:"M 0,-10 L 2,-3 L 10,-3 L 4,1 L 6,9 L 0,4 L -6,9 L -4,1 L -10,-3 L -2,-3 Z",
+      fillColor:fill, fillOpacity:0.95, strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:1, scale:scale };
+  }
+  function iconTriangle(fill){
+    return { path: google.maps.SymbolPath.BACKWARD_CLOSED_ARROW, fillColor:fill, fillOpacity:0.95,
+      strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:1, scale:6 };
+  }
+
+  function getServiceRadiusM(){
+    const km = Math.max(0.2, num(document.getElementById("svcKm").value, 1.5));
+    return km * 1000;
+  }
+  function getNetRadiusM(){
+    const km = Math.max(0.5, num(document.getElementById("netKm").value, 3.0));
+    return km * 1000;
+  }
+
+  // ===============================
+  // 4) DEMAND / EQUITY / PENALTY
+  // ===============================
+  function computeEquityFromProps(props, fallbackMedianAge){
+    const equityProxy = getProp(props, FIELD.equity_proxy, null);
+    if(equityProxy !== null) return num(equityProxy, 0);
+
+    const wimdNorm = getProp(props, FIELD.wimd_norm, null);
+    if(wimdNorm !== null) return num(wimdNorm, 0);
+
+    const r = num(getProp(props, FIELD.wimd_rank, NaN), NaN);
+    if(Number.isFinite(r)) return -r;
+
+    const d = num(getProp(props, FIELD.wimd_decile, NaN), NaN);
+    if(Number.isFinite(d)) return (11 - d) / 10;
+
+    return Number.isFinite(fallbackMedianAge) ? fallbackMedianAge : 0;
+  }
+
+  function computePenaltyFromProps(props){
+    const pc = getProp(props, FIELD.parking_constraint, null);
+    if(pc !== null){
+      const v = pctTo01(pc);
+      if(Number.isFinite(v)) return v;
+    }
+
+    const flats  = pctTo01(getProp(props, FIELD.share_flats, NaN));
+    const dense  = pctTo01(getProp(props, FIELD.share_dense, NaN));
+    const rented = pctTo01(getProp(props, FIELD.share_rented, NaN));
+    const nocar  = pctTo01(getProp(props, FIELD.share_no_car, NaN));
+
+    const arr = [flats,dense,rented,nocar].filter(Number.isFinite);
+    if(arr.length === 0) return 0;
+
+    const wFlats = 0.40, wDense = 0.25, wRented = 0.25, wNoCar = 0.10;
+    const val =
+      (Number.isFinite(flats)  ? wFlats*flats  : 0) +
+      (Number.isFinite(dense)  ? wDense*dense  : 0) +
+      (Number.isFinite(rented) ? wRented*rented: 0) +
+      (Number.isFinite(nocar)  ? wNoCar*nocar  : 0);
+
+    return clamp01(val);
+  }
+
+  function getDemandModelParams(){
+    const year = String(document.getElementById("yearSel").value || "2030");
+    const evPenUI = num(document.getElementById("evPen").value, NaN);
+    const evPen = Number.isFinite(evPenUI) ? evPenUI : (EV_PEN_DEFAULT[year] || 10);
+
+    const dailyKm = Math.max(1, num(document.getElementById("dailyKm").value, 40));
+    const kwhKm = Math.max(0.05, num(document.getElementById("kwhKm").value, 0.20));
+    const publicShare = clamp01(num(document.getElementById("publicShare").value, 0.35));
+
+    return { year, evPen, dailyKm, kwhKm, publicShare };
+  }
+
+  // demand kWh/day from population proxy (fallback to provided demand_score if pop missing)
+  function demandFromLSOA(pop, demandFallback){
+    const p = getDemandModelParams();
+    if(Number.isFinite(pop)){
+      const evCount = pop * (p.evPen/100);
+      return evCount * p.dailyKm * p.kwhKm * p.publicShare; // kWh/day
+    }
+    // fallback
+    const d = Number.isFinite(demandFallback) ? demandFallback : 1;
+    return Math.max(0, d);
+  }
+
+  // ===============================
+  // 5) SCORING UI
+  // ===============================
+  function setScorePanelVisible(){
+    const el = document.getElementById("scorePanel");
+    if(!el) return;
+    el.style.display = (activeTab === "score") ? "block" : "none";
+  }
+
+  function getWeights(){
+    let wd = num(document.getElementById("wDemand").value, 0.35);
+    let we = num(document.getElementById("wEquity").value, 0.25);
+    let wg = num(document.getElementById("wGap").value,    0.20);
+    let wcv = num(document.getElementById("wCover").value, 0.30);
+
+    // benefit weights normalized to sum 1
+    const sumB = wd + we + wg + wcv;
+    if(sumB > 0){ wd/=sumB; we/=sumB; wg/=sumB; wcv/=sumB; }
+    else { wd=0.30; we=0.25; wg=0.20; wcv=0.25; }
+
+    let wp = num(document.getElementById("wPenalty").value, 0.22);
+    let wn = num(document.getElementById("wNear").value,    0.18);
+    let wc = num(document.getElementById("wCluster").value, 0.22);
+    let wconn = num(document.getElementById("wConn").value,  0.18);
+
+    return { wd, we, wg, wcv, wp, wn, wc, wconn };
+  }
+
+  function updateWeightUI(){
+    const w = getWeights();
+    document.getElementById("wDemandVal").textContent  = w.wd.toFixed(2);
+    document.getElementById("wEquityVal").textContent  = w.we.toFixed(2);
+    document.getElementById("wGapVal").textContent     = w.wg.toFixed(2);
+    document.getElementById("wCoverVal").textContent   = w.wcv.toFixed(2);
+    document.getElementById("wPenaltyVal").textContent = w.wp.toFixed(2);
+    document.getElementById("wNearVal").textContent    = w.wn.toFixed(2);
+    document.getElementById("wClusterVal").textContent = w.wc.toFixed(2);
+    document.getElementById("wConnVal").textContent    = w.wconn.toFixed(2);
+
+    const mode = document.getElementById("scoreMode").value || "linear";
+    const formula = document.getElementById("scoreFormula");
+    const inline = document.getElementById("scoreFormulaInline");
+
+    let txt = "";
+    if(mode === "ga"){
+      txt =
+        "Score = Benefit × (1 − Cost). " +
+        "Benefit=" + w.wd.toFixed(2) + "·D + " + w.we.toFixed(2) + "·E + " + w.wg.toFixed(2) + "·Gap + " + w.wcv.toFixed(2) + "·CovGain; " +
+        "Cost=" + w.wp.toFixed(2) + "·Constr + " + w.wn.toFixed(2) + "·Near + " + w.wc.toFixed(2) + "·Cluster − " + w.wconn.toFixed(2) + "·Conn";
+    } else {
+      txt =
+        "Score = Benefit − Cost. " +
+        "Benefit=" + w.wd.toFixed(2) + "·D + " + w.we.toFixed(2) + "·E + " + w.wg.toFixed(2) + "·Gap + " + w.wcv.toFixed(2) + "·CovGain; " +
+        "Cost=" + w.wp.toFixed(2) + "·Constr + " + w.wn.toFixed(2) + "·Near + " + w.wc.toFixed(2) + "·Cluster − " + w.wconn.toFixed(2) + "·Conn";
+    }
+    formula.textContent = txt;
+    inline.textContent = txt;
+  }
+
+  // ===============================
+  // 6) TABS & CHOROPLETH
+  // ===============================
+  function setTab(tab){
+    activeTab = tab;
+    document.getElementById("tabKpi").classList.toggle("active", tab==="kpi");
+    document.getElementById("tabGap").classList.toggle("active", tab==="gap");
+    document.getElementById("tabScore").classList.toggle("active", tab==="score");
+
+    setScorePanelVisible();
+    styleLSOA();
+
+    if(activeTab === "score"){
+      updateWeightUI();
+      renderScoreTab();
+    }
+  }
+
+  function styleLSOA(){
+    if(!lsoaLayer) return;
+
+    if(activeTab === "gap"){
+      lsoaLayer.setStyle(function(ft){
+        const s = num(ft.getProperty("_gapScore"), 0);
+        let fill = "#10b981";
+        if(s > 0.66) fill = "#f87171";
+        else if(s > 0.33) fill = "#f59e0b";
+        return {
+          fillColor: fill,
+          fillOpacity: 0.42,
+          strokeColor: "#111827",
+          strokeOpacity: 0.75,
+          strokeWeight: 2.5
+        };
+      });
+    } else {
+      lsoaLayer.setStyle({
+        fillColor: "#93c5fd",
+        fillOpacity: 0.18,
+        strokeColor: "#2563eb",
+        strokeOpacity: 0.85,
+        strokeWeight: 2.5
+      });
+    }
+  }
+
+  // ===============================
+  // 7) GEOMETRY HELPERS (LSOA join)
+  // ===============================
+  function makePolygonsFromGeometry(geom){
+    const polys = [];
+    if(!geom) return polys;
+
+    const toPath = (ring) => ring.map(function(x){ return {lat:x[1], lng:x[0]}; });
+    const buildPoly = (rings) => {
+      const paths = rings.map(toPath);
+      return new google.maps.Polygon({ paths: paths });
+    };
+
+    if(geom.type === "Polygon"){
+      polys.push(buildPoly(geom.coordinates));
+    } else if(geom.type === "MultiPolygon"){
+      for(const poly of geom.coordinates){
+        polys.push(buildPoly(poly));
+      }
+    }
+    return polys;
+  }
+
+  function containsAny(polys, latLng){
+    for(const p of polys){
+      if(google.maps.geometry.poly.containsLocation(latLng, p)) return true;
+    }
+    return false;
+  }
+
+  function joinPointToLSOA(latLng){
+    for(const rec of lsoaIndex){
+      if(containsAny(rec.polygons, latLng)) return rec;
+    }
+    return null;
+  }
+
+  function normalize01(arr){
+    let mn=Infinity, mx=-Infinity;
+    for(const v of arr){
+      if(!Number.isFinite(v)) continue;
+      mn=Math.min(mn,v); mx=Math.max(mx,v);
+    }
+    if(!Number.isFinite(mn) || !Number.isFinite(mx) || mn===mx) return { norm: (_)=>0.5, mn:mn, mx:mx };
+    return { norm: (x)=> (x-mn)/(mx-mn), mn:mn, mx:mx };
+  }
+
+  // ===============================
+  // 8) KPI / GAP
+  // ===============================
+  function computeSupplyTotal(){
+    let sum = 0;
+    for(const p of supplyPts) sum += num(p.sockets, 0);
+    if(sum === 0 && supplyPts.length) sum = supplyPts.length;
+    return sum;
+  }
+
+  function computeLSOAGapScores(){
+    // supply per LSOA (rough spatial join)
+    const supplyByLSOA = new Map();
+    for(const s of supplyPts){
+      const ll = new google.maps.LatLng(s.lat, s.lng);
+      const rec = joinPointToLSOA(ll);
+      if(!rec) continue;
+      const prev = supplyByLSOA.get(rec.code) || 0;
+      supplyByLSOA.set(rec.code, prev + num(s.sockets, 1));
+    }
+
+    const demandArr = [];
+    const supplyArr = [];
+
+    for(const rec of lsoaIndex){
+      const sup = supplyByLSOA.get(rec.code) || 0;
+      rec.supplyRaw = sup;
+      demandArr.push(num(rec.demandRaw, 0));
+      supplyArr.push(num(rec.supplyRaw, 0));
+    }
+
+    const nd = normalize01(demandArr);
+    const ns = normalize01(supplyArr);
+
+    for(const rec of lsoaIndex){
+      if(!rec.feature) continue;
+      const d01 = nd.norm(num(rec.demandRaw, 0));
+      const s01 = ns.norm(num(rec.supplyRaw, 0));
+      const g = Math.max(0, Math.min(1, d01 - 0.7*s01)); // underserved = high demand and low supply
+      rec.gap01 = g;
+      rec.feature.setProperty("_gapScore", g);
+    }
+  }
+
+  // ===============================
+  // 9) COVERAGE INDEX (marginal gain)
+  // ===============================
+  function rebuildDistanceAndCoverage(){
+    const n = candPts.length;
+    if(n === 0) { coverSets = []; distMat = null; totalDemandW = 0; return; }
+
+    const R = getServiceRadiusM();
+    totalDemandW = 0;
+    for(const c of candPts) totalDemandW += Math.max(0, num(c.demandRaw, 1));
+
+    // build dist matrix (meters)
+    distMat = new Array(n);
+    for(let i=0;i<n;i++){
+      distMat[i] = new Float32Array(n);
+      distMat[i][i] = 0;
+    }
+    for(let i=0;i<n;i++){
+      for(let j=i+1;j<n;j++){
+        const d = distMeters(candPts[i].lat,candPts[i].lng,candPts[j].lat,candPts[j].lng);
+        distMat[i][j] = d;
+        distMat[j][i] = d;
+      }
+    }
+
+    // cover sets
+    coverSets = new Array(n);
+    for(let i=0;i<n;i++){
+      const arr = [];
+      for(let j=0;j<n;j++){
+        if(distMat[i][j] <= R) arr.push(j);
+      }
+      coverSets[i] = arr;
+    }
+  }
+
+  // ===============================
+  // 10) LIST / EXPORT
+  // ===============================
+  function updateSelectedLayer(){
+    selectedLayer.forEach(function(ft){ selectedLayer.remove(ft); });
+    const fc = {
+      type:"FeatureCollection",
+      features: selected.map(function(c, i){
+        return {
+          type:"Feature",
+          geometry:{ type:"Point", coordinates:[c.lng, c.lat] },
+          properties:{
+            rank:i+1,
+            name:c.name||"Selected",
+            score:c.score,
+            d01:c.d01, e01:c.e01, g01:c.g01,
+            covGain01: c.covGain01 ?? 0,
+            conn01: c.conn01 ?? 0,
+            constr:c.costConstr01,
+            near:c.costNear01,
+            cluster:c.costCluster01,
+            lsoa:c.lsoaCode||"",
+            demand_kwh_day: c.demandRaw ?? null,
+            population: c.pop ?? null,
+            median_age: c.medianAge ?? null,
+            dist_to_existing_m: c.distToExistingM ?? null
+          }
+        };
+      })
+    };
+    selectedLayer.addGeoJson(fc);
+  }
+
+  function focusCandidate(c){
+    map.panTo({lat:c.lat, lng:c.lng});
+    map.setZoom(Math.max(map.getZoom(), 14));
+
+    const pct = (x)=> Number.isFinite(x) ? Math.round(x*100) : null;
+
+    const badges = [];
+    if(Number.isFinite(c.distToExistingM)) badges.push("dist_to_existing " + Math.round(c.distToExistingM) + "m");
+    if(Number.isFinite(c.demandRaw)) badges.push("demand_kwh_day " + Math.round(c.demandRaw));
+    if(Number.isFinite(c.wimd_rank)) badges.push("wimd_rank " + Math.round(c.wimd_rank));
+    if(Number.isFinite(c.wimd_decile)) badges.push("wimd_decile " + Math.round(c.wimd_decile));
+
+    info.setContent(
+      "<b>" + escapeHtml(c.name||"Selected") + "</b><br/>" +
+      "Score: " + escapeHtml(c.score.toFixed(3)) + "<br/>" +
+      "D/E/Gap/CovGain/Conn: " +
+        pct(c.d01) + " / " + pct(c.e01) + " / " + pct(c.g01) + " / " + pct(c.covGain01||0) + " / " + pct(c.conn01||0) + "<br/>" +
+      "Cost(Constr/Near/Cluster): " + pct(c.costConstr01) + " / " + pct(c.costNear01) + " / " + pct(c.costCluster01) + "<br/>" +
+      "LSOA: " + escapeHtml(c.lsoaCode||"n/a") + "<br/>" +
+      "Population: " + (Number.isFinite(c.pop)? Math.round(c.pop): "n/a") + "<br/>" +
+      "Median age: " + (Number.isFinite(c.medianAge)? c.medianAge.toFixed(1): "n/a") + "<br/>" +
+      (badges.length ? '<div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">' +
+        badges.map(function(b){ return '<span class="badge">' + escapeHtml(b) + "</span>"; }).join("") +
+        "</div>" : "")
+    );
+    info.setPosition({lat:c.lat, lng:c.lng});
+    info.open({map});
+  }
+
+  function renderList(){
+    const list = document.getElementById("resultList");
+    const empty = document.getElementById("emptyHint");
+    const badge = document.getElementById("countBadge");
+    badge.textContent = String(selected.length);
+
+    if(!selected.length){
+      list.style.display="none";
+      empty.style.display="block";
+      return;
+    }
+    empty.style.display="none";
+    list.style.display="block";
+    list.innerHTML="";
+
+    selected.forEach(function(c, idx){
+      const div = document.createElement("div");
+      div.className="item";
+
+      const t = document.createElement("div");
+      t.className="itemTitle";
+      t.textContent = (idx+1) + ". " + (c.name || "Candidate");
+
+      const metaBadges = [];
+      metaBadges.push('<span class="badge">Score: ' + escapeHtml(c.score.toFixed(3)) + "</span>");
+      metaBadges.push('<span class="badge">CovGain ' + Math.round((c.covGain01||0)*100) + "</span>");
+      metaBadges.push('<span class="badge">Conn ' + Math.round((c.conn01||0)*100) + "</span>");
+      metaBadges.push('<span class="badge">LSOA: ' + escapeHtml(c.lsoaCode || "n/a") + "</span>");
+      if(Number.isFinite(c.distToExistingM)) metaBadges.push('<span class="badge">DistExist: ' + Math.round(c.distToExistingM) + "m</span>");
+
+      const m = document.createElement("div");
+      m.className="itemMeta";
+      m.innerHTML = metaBadges.join("");
+
+      div.appendChild(t);
+      div.appendChild(m);
+
+      div.addEventListener("click", function(){ focusCandidate(c); });
+      list.appendChild(div);
+    });
+  }
+
+  function downloadText(filename, text){
+    const blob = new Blob([text], {type:"text/plain;charset=utf-8"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href=url; a.download=filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 800);
+  }
+
+  function exportCSV(){
+    const rows = [["rank","name","lat","lng","score","d01","e01","g01","covGain01","conn01","constr01","near01","cluster01",
+                   "lsoa","demand_kwh_day","population","median_age","dist_to_existing_m",
+                   "parking_constraint","share_flats","share_dense","share_rented","share_no_car","wimd_rank","wimd_decile","wimd_norm"]];
+    selected.forEach(function(c,i){
+      rows.push([
+        i+1,
+        (c.name||"").replaceAll('"','""'),
+        c.lat, c.lng,
+        c.score.toFixed(6),
+        c.d01.toFixed(6), c.e01.toFixed(6), c.g01.toFixed(6),
+        (c.covGain01||0).toFixed(6),
+        (c.conn01||0).toFixed(6),
+        c.costConstr01.toFixed(6), c.costNear01.toFixed(6), c.costCluster01.toFixed(6),
+        c.lsoaCode||"",
+        Number.isFinite(c.demandRaw)? Math.round(c.demandRaw): "",
+        Number.isFinite(c.pop)? Math.round(c.pop): "",
+        Number.isFinite(c.medianAge)? c.medianAge: "",
+        Number.isFinite(c.distToExistingM)? Math.round(c.distToExistingM): "",
+        Number.isFinite(c.parking_constraint)? c.parking_constraint.toFixed(4): "",
+        Number.isFinite(c.share_flats)? c.share_flats.toFixed(4): "",
+        Number.isFinite(c.share_dense)? c.share_dense.toFixed(4): "",
+        Number.isFinite(c.share_rented)? c.share_rented.toFixed(4): "",
+        Number.isFinite(c.share_no_car)? c.share_no_car.toFixed(4): "",
+        Number.isFinite(c.wimd_rank)? Math.round(c.wimd_rank): "",
+        Number.isFinite(c.wimd_decile)? Math.round(c.wimd_decile): "",
+        Number.isFinite(c.wimd_norm)? c.wimd_norm.toFixed(6): ""
+      ]);
+    });
+    const csv = rows.map(function(r){ return r.map(function(x){ return '"' + x + '"'; }).join(","); }).join("\n");
+    downloadText("planner_shortlist_v2.csv", csv);
+  }
+
+  function exportGeoJSON(){
+    const fc = {
+      type:"FeatureCollection",
+      features: selected.map(function(c,i){
+        return {
+          type:"Feature",
+          geometry:{type:"Point", coordinates:[c.lng,c.lat]},
+          properties:{
+            rank:i+1,
+            name:c.name||"",
+            score:+c.score.toFixed(6),
+            d01:+c.d01.toFixed(6),
+            e01:+c.e01.toFixed(6),
+            g01:+c.g01.toFixed(6),
+            covGain01:+(c.covGain01||0).toFixed(6),
+            conn01:+(c.conn01||0).toFixed(6),
+            constr01:+c.costConstr01.toFixed(6),
+            near01:+c.costNear01.toFixed(6),
+            cluster01:+c.costCluster01.toFixed(6),
+            lsoa:c.lsoaCode||"",
+            demand_kwh_day: Number.isFinite(c.demandRaw)? Math.round(c.demandRaw): null,
+            population: Number.isFinite(c.pop)? Math.round(c.pop): null,
+            median_age: Number.isFinite(c.medianAge)? +c.medianAge.toFixed(1): null,
+            dist_to_existing_m: Number.isFinite(c.distToExistingM)? Math.round(c.distToExistingM): null
+          }
+        };
+      })
+    };
+    downloadText("planner_shortlist_v2.geojson", JSON.stringify(fc, null, 2));
+  }
+
+  // ===============================
+  // 11) DIST TO EXISTING
+  // ===============================
+  function computeDistancesToExisting(){
+    if(!supplyPts.length){
+      for(const c of candPts){ c.distToExistingM = NaN; }
+      return;
+    }
+    for(const c of candPts){
+      let best = Infinity;
+      for(const s of supplyPts){
+        const d = distMeters(c.lat,c.lng,s.lat,s.lng);
+        if(d < best) best = d;
+      }
+      c.distToExistingM = Number.isFinite(best) ? best : NaN;
+    }
+  }
+
+  // ===============================
+  // 12) COVERAGE & ADEQUACY KPIs
+  // ===============================
+  function computeCoverageDemand(selectedList){
+    const R = getServiceRadiusM();
+    const n = candPts.length;
+    if(!selectedList.length || !n) return { covW:0, avgDist:NaN };
+
+    let coveredW = 0, totalW = 0;
+    let distSum = 0, distN = 0;
+
+    for(const c of candPts){
+      const w = Math.max(0, num(c.demandRaw, 1));
+      totalW += w;
+
+      let best = Infinity;
+      for(const s of selectedList){
+        const d = distMeters(c.lat,c.lng,s.lat,s.lng);
+        if(d < best) best = d;
+      }
+      if(best <= R) coveredW += w;
+      if(Number.isFinite(best)){ distSum += best; distN++; }
+    }
+    return {
+      covW: totalW>0 ? coveredW/totalW : 0,
+      avgDist: distN>0 ? distSum/distN : NaN
+    };
+  }
+
+  // adequacy: for each demand point i, sum station capacity within α·Dcov / required demand (kWh/day)
+  function computeAdequacy(selectedList){
+    const cap = Math.max(10, num(document.getElementById("capPerSite").value, 350));
+    const alpha = clamp01(num(document.getElementById("alphaTol").value, 0.8));
+    const R = getServiceRadiusM() * alpha;
+    if(!selectedList.length || !candPts.length) return 0;
+
+    let satisfiedW = 0, totalW = 0;
+    for(const dp of candPts){
+      const demand = Math.max(0, num(dp.demandRaw, 0));
+      totalW += demand;
+      if(demand <= 0) continue;
+
+      let count = 0;
+      for(const s of selectedList){
+        const d = distMeters(dp.lat,dp.lng,s.lat,s.lng);
+        if(d <= R) count++;
+      }
+      const supply = count * cap;
+      const frac = Math.min(1, supply / demand);
+      satisfiedW += demand * frac;
+    }
+    return totalW>0 ? satisfiedW/totalW : 0;
+  }
+
+  // connectivity: build graph edges <= Dnet among selected, test connected
+  function isConnected(selectedList){
+    if(selectedList.length <= 1) return true;
+    const R = getNetRadiusM();
+    const visited = new Set();
+    const q = [0];
+    visited.add(0);
+
+    while(q.length){
+      const u = q.shift();
+      for(let v=0; v<selectedList.length; v++){
+        if(visited.has(v)) continue;
+        const duv = distMeters(selectedList[u].lat,selectedList[u].lng,selectedList[v].lat,selectedList[v].lng);
+        if(duv <= R){
+          visited.add(v);
+          q.push(v);
+        }
+      }
+    }
+    return visited.size === selectedList.length;
+  }
+
+  function connBonus01(candidate, picked){
+    if(!picked.length) return 1;
+    const R = getNetRadiusM();
+    let best = Infinity;
+    for(const s of picked){
+      const d = distMeters(candidate.lat,candidate.lng,s.lat,s.lng);
+      if(d < best) best = d;
+    }
+    // within R => 1, far => 0
+    return clamp01(1 - best / R);
+  }
+
+  // ===============================
+  // 13) SELECTION CORE
+  // ===============================
+  function computeLocalScoreBase(){
+    // normalize D/E/Gap and costs on candPts
+    const dN = normalize01(candPts.map(c=>num(c.demandRaw,0)));
+    const eN = normalize01(candPts.map(c=>num(c.equityRaw,0)));
+    const gN = normalize01(candPts.map(c=>num(c.gapRaw,0)));
+    const constrN = normalize01(candPts.map(c=>num(c.penaltyRaw,0)));
+
+    const R = getServiceRadiusM();
+    const nearArr = candPts.map(function(c){
+      const d = num(c.distToExistingM, NaN);
+      if(!Number.isFinite(d)) return 0;
+      return clamp01(1 - (d / R));
+    });
+    const nearN = normalize01(nearArr);
+
+    const w = getWeights();
+    const mode = document.getElementById("scoreMode").value || "linear";
+
+    for(let i=0;i<candPts.length;i++){
+      const c = candPts[i];
+
+      c.d01 = dN.norm(num(c.demandRaw, 0));
+      c.e01 = eN.norm(num(c.equityRaw, 0));
+      c.g01 = gN.norm(num(c.gapRaw, 0));
+
+      c.costConstr01 = constrN.norm(num(c.penaltyRaw, 0));
+      c.costNear01   = nearN.norm(nearArr[i]);
+      c.costCluster01 = 0;
+
+      // covGain/conn will be filled in greedy loop
+      c.covGain01 = 0;
+      c.conn01 = 0;
+
+      // local benefit excludes covGain/conn (added later)
+      c.benefitLocal = w.wd*c.d01 + w.we*c.e01 + w.wg*c.g01;
+      c.costLocal = clamp01(w.wp*c.costConstr01 + w.wn*c.costNear01);
+
+      c.scoreBase = (mode === "ga") ? (c.benefitLocal * (1 - c.costLocal)) : (c.benefitLocal - c.costLocal);
+      c.score = c.scoreBase;
+    }
+
+    // normalize local score base to 0..1 for mixing
+    const sNorm = normalize01(candPts.map(c=>c.scoreBase));
+    for(const c of candPts){
+      c.scoreBase01 = sNorm.norm(c.scoreBase);
+    }
+  }
+
+  function greedySelect(P){
+    const w = getWeights();
+    const mode = document.getElementById("scoreMode").value || "linear";
+    const connMode = document.getElementById("connMode").value || "soft";
+
+    const enforceSpread = document.getElementById("ckSpread").checked;
+    const minSpacingM = Math.max(0, num(document.getElementById("minSpacing").value, 700));
+    const Rnet = getNetRadiusM();
+
+    const n = candPts.length;
+    const pickedIdx = [];
+    const covered = new Uint8Array(n);
+
+    let coveredW = 0;
+
+    function marginalCoverage(i){
+      let add = 0;
+      const cov = coverSets[i] || [];
+      for(const j of cov){
+        if(!covered[j]){
+          add += Math.max(0, num(candPts[j].demandRaw, 1));
+        }
+      }
+      return add;
+    }
+
+    function applyCoverage(i){
+      const cov = coverSets[i] || [];
+      for(const j of cov){
+        if(!covered[j]){
+          covered[j] = 1;
+          coveredW += Math.max(0, num(candPts[j].demandRaw, 1));
+        }
+      }
+    }
+
+    function minDistToPicked(c){
+      if(!pickedIdx.length) return Infinity;
+      let best = Infinity;
+      for(const idx of pickedIdx){
+        const s = candPts[idx];
+        const d = distMeters(c.lat,c.lng,s.lat,s.lng);
+        if(d < best) best = d;
+      }
+      return best;
+    }
+
+    while(pickedIdx.length < P){
+      let bestIdx = -1;
+      let bestScore = -Infinity;
+
+      for(let i=0;i<n;i++){
+        if(pickedIdx.includes(i)) continue;
+        const c = candPts[i];
+
+        // spread constraint
+        const dPick = minDistToPicked(c);
+        if(enforceSpread && pickedIdx.length>0 && dPick < minSpacingM) continue;
+
+        // connectivity hard constraint
+        if(connMode === "hard" && pickedIdx.length>0){
+          if(dPick > Rnet) continue;
+        }
+
+        const covAdd = marginalCoverage(i);
+        const covGain01 = (totalDemandW > 0) ? clamp01(covAdd / totalDemandW) : 0;
+
+        const conn01 = (pickedIdx.length===0) ? 1 : connBonus01(c, pickedIdx.map(idx=>candPts[idx]));
+
+        // cluster cost: closer to selected => higher penalty
+        const clusterCost = (pickedIdx.length===0) ? 0 : clamp01(1 - (dPick / Math.max(1, minSpacingM)));
+
+        // mix: benefit includes local + covGain + conn
+        const benefit = clamp01(c.benefitLocal + w.wcv*covGain01 + w.wconn*conn01);
+        const cost = clamp01(c.costLocal + w.wc*clusterCost);
+
+        const score = (mode === "ga") ? (benefit * (1 - cost)) : (benefit - cost);
+
+        if(score > bestScore){
+          bestScore = score;
+          bestIdx = i;
+        }
+      }
+
+      if(bestIdx === -1){
+        // relax once if spread blocks all
+        if(document.getElementById("ckSpread").checked && pickedIdx.length>0){
+          document.getElementById("ckSpread").checked = false;
+          return greedySelect(P);
+        }
+        break;
+      }
+
+      pickedIdx.push(bestIdx);
+      applyCoverage(bestIdx);
+    }
+
+    // finalize per-candidate attributes
+    const picked = pickedIdx.map(i=>candPts[i]);
+
+    // compute covGain01 sequentially for reporting (replay)
+    const covered2 = new Uint8Array(n);
+    let coveredW2 = 0;
+    for(const c of picked){
+      const i = candPts.indexOf(c);
+      let add = 0;
+      for(const j of (coverSets[i]||[])){
+        if(!covered2[j]) add += Math.max(0, num(candPts[j].demandRaw, 1));
+      }
+      c.covGain01 = (totalDemandW>0) ? clamp01(add/totalDemandW) : 0;
+
+      // apply
+      for(const j of (coverSets[i]||[])){
+        if(!covered2[j]){
+          covered2[j]=1;
+          coveredW2 += Math.max(0, num(candPts[j].demandRaw, 1));
+        }
+      }
+
+      // conn01
+      const prev = picked.slice(0, picked.indexOf(c));
+      c.conn01 = prev.length ? connBonus01(c, prev) : 1;
+
+      // cluster cost
+      let bestD = Infinity;
+      for(const s of picked){
+        if(s===c) continue;
+        const d = distMeters(c.lat,c.lng,s.lat,s.lng);
+        if(d < bestD) bestD = d;
+      }
+      c.minDistToSelectedM = Number.isFinite(bestD)? bestD : NaN;
+      const minSpacingM = Math.max(0, num(document.getElementById("minSpacing").value, 700));
+      c.costCluster01 = (picked.length<=1 || !Number.isFinite(bestD)) ? 0 : clamp01(1 - (bestD / Math.max(1, minSpacingM)));
+
+      // recompute final score (consistent)
+      const w = getWeights();
+      const mode = document.getElementById("scoreMode").value || "linear";
+      const benefit = clamp01(c.benefitLocal + w.wcv*c.covGain01 + w.wconn*c.conn01);
+      const cost = clamp01(c.costLocal + w.wc*c.costCluster01);
+      c.benefit = benefit;
+      c.cost = cost;
+      c.score = (mode === "ga") ? (benefit * (1 - cost)) : (benefit - cost);
+    }
+
+    picked.sort((a,b)=>b.score-a.score);
+    return picked;
+  }
+
+  // zones mode: centroid-linkage agglomerative to P clusters, then pick 1 per cluster
+  function zonesSelect(P){
+    const n = candPts.length;
+    if(n === 0) return [];
+    P = Math.max(1, Math.min(P, n));
+
+    // init clusters: each point is cluster
+    let clusters = [];
+    for(let i=0;i<n;i++){
+      const w = Math.max(1e-6, num(candPts[i].demandRaw,1));
+      clusters.push({ members:[i], lat:candPts[i].lat, lng:candPts[i].lng, wsum:w });
+    }
+
+    // merge closest centroid clusters until size==P
+    function centroidDist(a,b){
+      return distMeters(a.lat,a.lng,b.lat,b.lng);
+    }
+
+    while(clusters.length > P){
+      let bestA=-1, bestB=-1, bestD=Infinity;
+      for(let i=0;i<clusters.length;i++){
+        for(let j=i+1;j<clusters.length;j++){
+          const d = centroidDist(clusters[i], clusters[j]);
+          if(d < bestD){
+            bestD = d; bestA=i; bestB=j;
+          }
+        }
+      }
+      const A = clusters[bestA], B = clusters[bestB];
+      const wsum = A.wsum + B.wsum;
+      const lat = (A.lat*A.wsum + B.lat*B.wsum)/wsum;
+      const lng = (A.lng*A.wsum + B.lng*B.wsum)/wsum;
+      const merged = { members: A.members.concat(B.members), lat, lng, wsum };
+      clusters.splice(bestB,1);
+      clusters.splice(bestA,1);
+      clusters.push(merged);
+    }
+
+    // for each cluster, choose best candidate balancing local score and distance to zone center
+    const picked = [];
+    const used = new Set();
+    const minSpacingM = Math.max(0, num(document.getElementById("minSpacing").value, 700));
+    const enforceSpread = document.getElementById("ckSpread").checked;
+
+    for(const cl of clusters){
+      let bestIdx=-1, bestVal=-Infinity;
+      for(const i of cl.members){
+        if(used.has(i)) continue;
+        const c = candPts[i];
+
+        if(enforceSpread){
+          let ok = true;
+          for(const s of picked){
+            const d = distMeters(c.lat,c.lng,s.lat,s.lng);
+            if(d < minSpacingM){ ok=false; break; }
+          }
+          if(!ok) continue;
+        }
+
+        const distC = distMeters(c.lat,c.lng,cl.lat,cl.lng);
+        // normalize distC by Dcov
+        const dc01 = clamp01(distC / Math.max(1, getServiceRadiusM()));
+        const val = c.scoreBase01 - 0.35*dc01; // closer to center preferred
+        if(val > bestVal){
+          bestVal = val;
+          bestIdx = i;
+        }
+      }
+      if(bestIdx !== -1){
+        used.add(bestIdx);
+        picked.push(candPts[bestIdx]);
+      }
+    }
+
+    // if we didn't reach P due to spacing, fill remainder with greedy
+    if(picked.length < P){
+      const remain = greedySelect(P).filter(c=>!picked.includes(c));
+      while(picked.length < P && remain.length){
+        picked.push(remain.shift());
+      }
+    }
+
+    // recompute covGain/conn/cluster/score for picked
+    // (reuse greedy finalization by temporarily forcing greedy ordering)
+    // We'll just sort by final score computed similarly to greedy finalize:
+    const w = getWeights();
+    const mode = document.getElementById("scoreMode").value || "linear";
+    const Rnet = getNetRadiusM();
+
+    const covered = new Uint8Array(n);
+    for(const c of picked){
+      const idx = candPts.indexOf(c);
+      let add = 0;
+      for(const j of (coverSets[idx]||[])){
+        if(!covered[j]) add += Math.max(0, num(candPts[j].demandRaw, 1));
+      }
+      c.covGain01 = (totalDemandW>0) ? clamp01(add/totalDemandW) : 0;
+      for(const j of (coverSets[idx]||[])) covered[j]=1;
+
+      const prev = picked.slice(0, picked.indexOf(c));
+      c.conn01 = prev.length ? connBonus01(c, prev) : 1;
+
+      let bestD = Infinity;
+      for(const s of picked){
+        if(s===c) continue;
+        const d = distMeters(c.lat,c.lng,s.lat,s.lng);
+        if(d < bestD) bestD = d;
+      }
+      c.minDistToSelectedM = Number.isFinite(bestD)? bestD : NaN;
+      const minSpacingM = Math.max(0, num(document.getElementById("minSpacing").value, 700));
+      c.costCluster01 = (picked.length<=1 || !Number.isFinite(bestD)) ? 0 : clamp01(1 - (bestD / Math.max(1, minSpacingM)));
+
+      const benefit = clamp01(c.benefitLocal + w.wcv*c.covGain01 + w.wconn*c.conn01);
+      const cost = clamp01(c.costLocal + w.wc*c.costCluster01);
+      c.benefit = benefit;
+      c.cost = cost;
+      c.score = (mode === "ga") ? (benefit*(1-cost)) : (benefit-cost);
+    }
+
+    picked.sort((a,b)=>b.score-a.score);
+    return picked.slice(0,P);
+  }
+
+  // GA-lite / evo refine: swap hill-climb
+  function evoRefine(initial, P){
+    const iters = Math.max(0, Math.floor(num(document.getElementById("evoIters").value, 300)));
+    if(iters <= 0) return initial;
+
+    const connMode = document.getElementById("connMode").value || "soft";
+    const enforceSpread = document.getElementById("ckSpread").checked;
+    const minSpacingM = Math.max(0, num(document.getElementById("minSpacing").value, 700));
+    const Rnet = getNetRadiusM();
+
+    let best = initial.slice(0,P);
+    let bestObj = objectiveValue(best);
+
+    function objectiveValue(sel){
+      // demand-weighted coverage + mean score + connectivity (penalty if disconnected)
+      const cov = computeCoverageDemand(sel).covW;
+      const adeq = computeAdequacy(sel);
+      const conn = isConnected(sel) ? 1 : 0;
+
+      const sAvg = sel.reduce((a,b)=>a+b.score,0)/Math.max(1,sel.length);
+      let obj = 0.55*cov + 0.20*adeq + 0.25*clamp01((sAvg+1)/2); // map roughly to 0..1
+
+      if(connMode !== "off"){
+        obj += 0.08*conn;
+        if(connMode === "hard" && conn===0) obj -= 1.0;
+      }
+      return obj;
+    }
+
+    function violatesSpread(sel){
+      if(!enforceSpread) return false;
+      for(let i=0;i<sel.length;i++){
+        for(let j=i+1;j<sel.length;j++){
+          if(distMeters(sel[i].lat,sel[i].lng,sel[j].lat,sel[j].lng) < minSpacingM) return true;
+        }
+      }
+      return false;
+    }
+
+    for(let t=0;t<iters;t++){
+      // random swap 1 out 1 in
+      const outIdx = Math.floor(Math.random()*best.length);
+      const out = best[outIdx];
+
+      const inCand = candPts[Math.floor(Math.random()*candPts.length)];
+      if(best.includes(inCand)) continue;
+
+      const trial = best.slice();
+      trial[outIdx] = inCand;
+
+      if(violatesSpread(trial)) continue;
+      if(connMode === "hard" && !isConnected(trial)) continue;
+
+      // recompute cover/conn/cluster/score by rerunning greedy finalize quickly:
+      // simple: keep their existing scoreBase and approximate; for accuracy, we runScenario() anyway after selection.
+      const obj = objectiveValue(trial);
+      if(obj > bestObj){
+        best = trial;
+        bestObj = obj;
+      }
+    }
+
+    return best;
+  }
+
+  // ===============================
+  // 14) SCORE TAB RENDER
+  // ===============================
+  function renderScoreTab(){
+    const scoreList = document.getElementById("scoreList");
+    const badge = document.getElementById("scoreCountBadge");
+    if(!scoreList || !badge) return;
+
+    if(!selected || selected.length === 0){
+      badge.textContent = "0";
+      scoreList.innerHTML =
+        '<div class="item"><div class="itemTitle">No shortlist yet</div>' +
+        '<div class="muted">Click <b>Run scenario</b> first, then adjust sliders.</div></div>';
+      document.getElementById("k_cov").textContent = "–";
+      document.getElementById("k_adeq").textContent = "–";
+      document.getElementById("k_conn").textContent = "–";
+      document.getElementById("k_dexist").textContent = "–";
+      return;
+    }
+
+    badge.textContent = String(selected.length);
+
+    const avg = (arr)=> arr.reduce((a,b)=>a+b,0)/Math.max(1,arr.length);
+    const dexist = avg(selected.map(x=>num(x.distToExistingM, NaN)).filter(Number.isFinite));
+    document.getElementById("k_dexist").textContent = Number.isFinite(dexist) ? String(Math.round(dexist)) : "–";
+
+    const cov = computeCoverageDemand(selected).covW;
+    const adeq = computeAdequacy(selected);
+    const conn = isConnected(selected);
+
+    document.getElementById("k_cov").textContent = (cov*100).toFixed(0) + "%";
+    document.getElementById("k_adeq").textContent = (adeq*100).toFixed(0) + "%";
+    document.getElementById("k_conn").textContent = conn ? "YES" : "NO";
+
+    scoreList.innerHTML = "";
+    selected.forEach((c, idx)=>{
+      const div = document.createElement("div");
+      div.className = "item";
+
+      const title = document.createElement("div");
+      title.className = "itemTitle";
+      title.textContent = (idx+1) + ". " + (c.name || "Candidate") + " (score=" + c.score.toFixed(3) + ")";
+
+      const meta = document.createElement("div");
+      meta.className = "itemMeta";
+      meta.innerHTML =
+        '<span class="badge">D ' + (c.d01*100).toFixed(0) + '</span>' +
+        '<span class="badge">E ' + (c.e01*100).toFixed(0) + '</span>' +
+        '<span class="badge">Gap ' + (c.g01*100).toFixed(0) + '</span>' +
+        '<span class="badge">CovGain ' + ((c.covGain01||0)*100).toFixed(0) + '</span>' +
+        '<span class="badge">Conn ' + ((c.conn01||0)*100).toFixed(0) + '</span>' +
+        '<span class="badge">Constr ' + (c.costConstr01*100).toFixed(0) + '</span>' +
+        '<span class="badge">Near ' + (c.costNear01*100).toFixed(0) + '</span>' +
+        '<span class="badge">LSOA ' + escapeHtml(c.lsoaCode || "n/a") + '</span>';
+
+      const clampPct = (x)=> Math.max(0, Math.min(100, x*100));
+
+      const bars1 = document.createElement("div");
+      bars1.className = "barRow";
+      bars1.innerHTML =
+        '<span class="tiny" style="width:66px;">Benefit</span>' +
+        '<div class="barTrack"><div class="barFill" style="width:' + clampPct(c.benefit||0) + '%; background:#2563eb;"></div></div>' +
+        '<span class="tiny mono" style="width:66px; text-align:right;">' + (c.benefit||0).toFixed(3) + '</span>';
+
+      const bars2 = document.createElement("div");
+      bars2.className = "barRow";
+      bars2.innerHTML =
+        '<span class="tiny" style="width:66px;">Cost</span>' +
+        '<div class="barTrack"><div class="barFill" style="width:' + clampPct(c.cost||0) + '%; background:#6b7280;"></div></div>' +
+        '<span class="tiny mono" style="width:66px; text-align:right;">' + (c.cost||0).toFixed(3) + '</span>';
+
+      div.appendChild(title);
+      div.appendChild(meta);
+      div.appendChild(bars1);
+      div.appendChild(bars2);
+
+      div.addEventListener("click", function(){ focusCandidate(c); });
+      scoreList.appendChild(div);
+    });
+  }
+
+  // ===============================
+  // 15) RUN SCENARIO
+  // ===============================
+  function runScenario(){
+    const P = Math.max(1, Math.floor(num(document.getElementById("pSel").value, 10)));
+    const year = String(document.getElementById("yearSel").value || "2030");
+    const target = num(TARGET_BY_YEAR[year], 1500);
+
+    // keep EV pen default aligned to year if user hasn't touched
+    const evPenEl = document.getElementById("evPen");
+    if(evPenEl && (evPenEl.dataset.touched !== "1")){
+      evPenEl.value = String(EV_PEN_DEFAULT[year] || 10);
+    }
+
+    const supplyTotal = computeSupplyTotal();
+    const gap = Math.max(0, target - supplyTotal);
+
+    document.getElementById("k_supply").textContent = String(Math.round(supplyTotal));
+    document.getElementById("k_target").textContent = String(Math.round(target));
+    document.getElementById("k_gap").textContent = String(Math.round(gap));
+
+    if(!candPts.length){
+      setStatus("No candidates loaded. Check demand_points_cardiff_exact_pop_wgs84.geojson path.");
+      return;
+    }
+
+    // recompute demandRaw for candidates if pop exists (demand model is time-horizon dependent)
+    for(const c of candPts){
+      const fallbackDemand = num(c.demandFallback, NaN);
+      c.demandRaw = demandFromLSOA(c.pop, fallbackDemand);
+    }
+
+    // rebuild coverage index when Dcov / demand changes
+    rebuildDistanceAndCoverage();
+
+    // refresh LSOA gap (since demand may change by year)
+    // (We keep LSOA demandRaw fixed from load time; gap map uses that. If you want year-based gap map,
+    //  you can also update lsoaIndex demandRaw similarly.)
+    computeLSOAGapScores();
+    styleLSOA();
+
+    // local base score
+    computeLocalScoreBase();
+
+    // choose strategy
+    const selMode = document.getElementById("selMode").value || "greedy";
+    let picked = [];
+
+    if(selMode === "rank"){
+      picked = candPts.slice().sort((a,b)=>b.scoreBase-a.scoreBase).slice(0,P);
+      // add covGain/conn/cluster + final score for reporting
+      picked = evoRefine(picked, P); // no-op if iters=0; also updates robustness a bit
+      // finalize like greedy (quick)
+      picked = greedySelect(P); // ensures attributes coherent with v2 formula
+    } else if(selMode === "zones"){
+      picked = zonesSelect(P);
+    } else if(selMode === "evo"){
+      const base = greedySelect(P);
+      const refined = evoRefine(base, P);
+      picked = refined;
+      // to ensure per-field metrics coherent, run greedy finalization on the chosen set order:
+      // we keep refined as selected but recompute fields below
+      // (approx: we will compute covGain/conn/cluster/score on picked sequentially)
+      // simple: reuse greedy finalization logic by temporarily sorting by scoreBase01:
+      picked.sort((a,b)=>b.scoreBase01-a.scoreBase01);
+      // recompute detail fields on picked
+      const w = getWeights();
+      const mode = document.getElementById("scoreMode").value || "linear";
+      const n = candPts.length;
+      const covered = new Uint8Array(n);
+      for(const c of picked){
+        const idx = candPts.indexOf(c);
+        let add=0;
+        for(const j of (coverSets[idx]||[])){
+          if(!covered[j]) add += Math.max(0, num(candPts[j].demandRaw, 1));
+        }
+        c.covGain01 = (totalDemandW>0) ? clamp01(add/totalDemandW) : 0;
+        for(const j of (coverSets[idx]||[])) covered[j]=1;
+
+        const prev = picked.slice(0, picked.indexOf(c));
+        c.conn01 = prev.length ? connBonus01(c, prev) : 1;
+
+        let bestD = Infinity;
+        for(const s of picked){
+          if(s===c) continue;
+          const d = distMeters(c.lat,c.lng,s.lat,s.lng);
+          if(d < bestD) bestD = d;
+        }
+        c.minDistToSelectedM = Number.isFinite(bestD)? bestD : NaN;
+        const minSpacingM = Math.max(0, num(document.getElementById("minSpacing").value, 700));
+        c.costCluster01 = (picked.length<=1 || !Number.isFinite(bestD)) ? 0 : clamp01(1 - (bestD / Math.max(1, minSpacingM)));
+
+        const benefit = clamp01(c.benefitLocal + w.wcv*c.covGain01 + w.wconn*c.conn01);
+        const cost = clamp01(c.costLocal + w.wc*c.costCluster01);
+        c.benefit = benefit;
+        c.cost = cost;
+        c.score = (mode === "ga") ? (benefit*(1-cost)) : (benefit-cost);
+      }
+      picked.sort((a,b)=>b.score-a.score);
+      picked = picked.slice(0,P);
+
+    } else {
+      picked = greedySelect(P);
+    }
+
+    // ensure final size
+    picked = picked.slice(0, P);
+
+    // update selected
+    selected = picked;
+
+    updateSelectedLayer();
+    renderList();
+
+    document.getElementById("k_selected").textContent = String(selected.length);
+    document.getElementById("btnExportCsv").disabled = selected.length===0;
+    document.getElementById("btnExportGeo").disabled = selected.length===0;
+
+    // KPIs
+    const cov = computeCoverageDemand(selected);
+    const adeq = computeAdequacy(selected);
+    const conn = isConnected(selected);
+
+    updateWeightUI();
+    if(activeTab === "score") renderScoreTab();
+
+    setStatus(
+      "Scenario done.\n" +
+      "Year=" + year + ", target=" + Math.round(target) + ", supply=" + Math.round(supplyTotal) + ", gap=" + Math.round(gap) + ".\n" +
+      "Candidates=" + candPts.length + ", selected Top " + selected.length + ".\n" +
+      "Dcov=" + (getServiceRadiusM()/1000).toFixed(1) + "km, coverage=" + (cov.covW*100).toFixed(0) + "%.\n" +
+      "Adequacy(α·Dcov)=" + (adeq*100).toFixed(0) + "%, connected=" + (conn ? "YES" : "NO") + " (Dnet=" + (getNetRadiusM()/1000).toFixed(1) + "km).\n" +
+      "Tip: switch to 'Gap map' to show underserved LSOAs, or 'Scoring' to explain the formula."
+    );
+  }
+
+  // ===============================
+  // 16) MAP INIT
+  // ===============================
+  async function initMap(){
+    map = new google.maps.Map(document.getElementById("map"), {
+      center:{lat:51.4816,lng:-3.1791},
+      zoom:12,
+      mapTypeControl:false, streetViewControl:false, fullscreenControl:true
+    });
+    info = new google.maps.InfoWindow();
+
+    supplyLayer   = new google.maps.Data({map});
+    lsoaLayer     = new google.maps.Data({map});
+    candLayer     = new google.maps.Data({map});
+    selectedLayer = new google.maps.Data({map});
+    solutionLayer = new google.maps.Data({map});
+
+    // Hover-aware styles (make supply more visible)
+    supplyLayer.setStyle(function(ft){
+      const hov = !!ft.getProperty("_hover");
+      return { icon: iconCircle("#2563eb", hov ? 12 : 9, hov ? 6 : 5), zIndex: 800 };
+    });
+    candLayer.setStyle(function(ft){
+      const hov = !!ft.getProperty("_hover");
+      return { icon: iconCircle("#f59e0b", hov ? 8 : 6.5, hov ? 3 : 2), zIndex: 700 };
+    });
+    selectedLayer.setStyle(function(ft){
+      const hov = !!ft.getProperty("_hover");
+      return { icon: iconStar("#ef4444", hov ? 1.45 : 1.20), zIndex: 9999 };
+    });
+    solutionLayer.setStyle(function(){ return { icon: iconTriangle("#7c3aed"), zIndex: 850 }; });
+
+    function addHover(layer){
+      layer.addListener("mouseover", function(e){ e.feature.setProperty("_hover", true); });
+      layer.addListener("mouseout", function(e){ e.feature.setProperty("_hover", false); });
+    }
+    addHover(supplyLayer);
+    addHover(candLayer);
+    addHover(selectedLayer);
+
+    styleLSOA();
+    setScorePanelVisible();
+    updateWeightUI();
+
+    if(ENABLE_P10_OVERLAY){
+      document.getElementById("ckSolutionWrap").style.display = "inline-flex";
+      document.getElementById("ckSolution").checked = false;
+      solutionLayer.setMap(null);
+      document.getElementById("ckSolution").addEventListener("change", function(e){
+        solutionLayer.setMap(e.target.checked ? map : null);
+      });
+    } else {
+      document.getElementById("ckSolutionWrap").style.display = "none";
+      solutionLayer.setMap(null);
+    }
+
+    // UI toggles
+    document.getElementById("ckSupply").addEventListener("change", function(e){ supplyLayer.setMap(e.target.checked? map:null); });
+    document.getElementById("ckLSOA").addEventListener("change", function(e){ lsoaLayer.setMap(e.target.checked? map:null); });
+    document.getElementById("ckCandidates").addEventListener("change", function(e){ candLayer.setMap(e.target.checked? map:null); });
+    document.getElementById("ckSelected").addEventListener("change", function(e){ selectedLayer.setMap(e.target.checked? map:null); });
+
+    document.getElementById("tabKpi").addEventListener("click", function(){ setTab("kpi"); });
+    document.getElementById("tabGap").addEventListener("click", function(){ setTab("gap"); });
+    document.getElementById("tabScore").addEventListener("click", function(){ setTab("score"); });
+
+    document.getElementById("btnRun").addEventListener("click", runScenario);
+    document.getElementById("btnExportCsv").addEventListener("click", exportCSV);
+    document.getElementById("btnExportGeo").addEventListener("click", exportGeoJSON);
+    document.getElementById("btnPrint").addEventListener("click", function(){ window.print(); });
+
+    // mark user-touched for EV pen
+    document.getElementById("evPen").addEventListener("input", function(e){ e.target.dataset.touched = "1"; });
+
+    function hookRerun(id, evtName){
+      const el = document.getElementById(id);
+      if(!el) return;
+      el.addEventListener(evtName || "input", function(){
+        updateWeightUI();
+        if(Array.isArray(candPts) && candPts.length > 0) runScenario();
+      });
+    }
+    // Sliders and inputs
+    ["wDemand","wEquity","wGap","wCover","wPenalty","wNear","wCluster","wConn"].forEach(function(id){ hookRerun(id, "input"); });
+    ["scoreMode","svcKm","netKm","connMode","minSpacing","selMode","ckSpread","evoIters","evPen","dailyKm","kwhKm","publicShare","capPerSite","alphaTol","yearSel","pSel"]
+      .forEach(function(id){ hookRerun(id, "change"); });
+
+    try{
+      setStatus("Loading GeoJSON…");
+
+      const [supply, lsoa, candidates] = await Promise.all([
+        loadGeoJSON(DATA_URLS.supply),
+        loadGeoJSON(DATA_URLS.lsoa),
+        loadGeoJSON(DATA_URLS.candidates)
+      ]);
+
+      const solution = ENABLE_P10_OVERLAY ? await loadGeoJSONOptional(DATA_URLS.solution) : null;
+
+      supplyLayer.addGeoJson(supply);
+      lsoaLayer.addGeoJson(lsoa);
+      candLayer.addGeoJson(candidates);
+      if(solution) solutionLayer.addGeoJson(solution);
+
+      // build LSOA index
+      lsoaIndex = (lsoa.features||[]).map(function(f){
+        const props = f.properties || {};
+        const code = getProp(props, FIELD.code, "LSOA");
+
+        const pop  = num(getProp(props, FIELD.pop, null), NaN);
+        const demandFallback = num(getProp(props, FIELD.demand, 1), 1);
+        const demandRaw = demandFromLSOA(pop, demandFallback);
+
+        const medAge = num(getProp(props, FIELD.median_age, null), NaN);
+        const equityRaw = computeEquityFromProps(props, medAge);
+
+        const penaltyRaw = computePenaltyFromProps(props);
+
+        const wimd_norm   = num(getProp(props, FIELD.wimd_norm, NaN), NaN);
+        const wimd_rank   = num(getProp(props, FIELD.wimd_rank, NaN), NaN);
+        const wimd_decile = num(getProp(props, FIELD.wimd_decile, NaN), NaN);
+
+        const parking_constraint = pctTo01(getProp(props, FIELD.parking_constraint, NaN));
+        const share_flats  = pctTo01(getProp(props, FIELD.share_flats, NaN));
+        const share_dense  = pctTo01(getProp(props, FIELD.share_dense, NaN));
+        const share_rented = pctTo01(getProp(props, FIELD.share_rented, NaN));
+        const share_no_car = pctTo01(getProp(props, FIELD.share_no_car, NaN));
+
+        const polygons = makePolygonsFromGeometry(f.geometry);
+
+        return {
+          code: code,
+          pop: pop,
+          medianAge: medAge,
+          demandRaw: demandRaw,
+          demandFallback: demandFallback,
+          equityRaw: equityRaw,
+          penaltyRaw: penaltyRaw,
+          wimd_norm: wimd_norm, wimd_rank: wimd_rank, wimd_decile: wimd_decile,
+          parking_constraint: parking_constraint,
+          share_flats: share_flats, share_dense: share_dense, share_rented: share_rented, share_no_car: share_no_car,
+          polygons: polygons,
+          feature: null,
+          supplyRaw: 0,
+          gap01: 0
+        };
+      });
+
+      // Map Data features back to index
+      const lsoaByCode = new Map(lsoaIndex.map(function(r){ return [r.code, r]; }));
+      lsoaLayer.forEach(function(ft){
+        const propsLike = {
+          LSOA21CD: ft.getProperty("LSOA21CD"),
+          lsoa21cd: ft.getProperty("lsoa21cd"),
+          LSOA11CD: ft.getProperty("LSOA11CD"),
+          lsoa11cd: ft.getProperty("lsoa11cd"),
+          code: ft.getProperty("code"),
+          id: ft.getProperty("id"),
+        };
+        const code = getProp(propsLike, FIELD.code, null);
+        if(code && lsoaByCode.has(code)){
+          const rec = lsoaByCode.get(code);
+          rec.feature = ft;
+          ft.setProperty("code", rec.code);
+        }
+      });
+
+      // supply cache
+      supplyPts = [];
+      for(const f of (supply.features||[])){
+        if(!f.geometry || f.geometry.type!=="Point") continue;
+        const coords = f.geometry.coordinates || [];
+        const lng = coords[0], lat = coords[1];
+        if(typeof lat!=="number" || typeof lng!=="number") continue;
+        if(looksLike27700(lng, lat)) continue;
+        const props = f.properties || {};
+        const sockets = num(getProp(props, FIELD.sockets, 0), 0);
+        supplyPts.push({lat:lat, lng:lng, sockets: (sockets || 1)});
+      }
+
+      // initial gap scores
+      computeLSOAGapScores();
+
+      // candidate cache + join to LSOA
+      candPts = [];
+      for(const f of (candidates.features||[])){
+        if(!f.geometry || f.geometry.type!=="Point") continue;
+        const coords = f.geometry.coordinates || [];
+        const lng = coords[0], lat = coords[1];
+        if(typeof lat!=="number" || typeof lng!=="number") continue;
+        if(looksLike27700(lng, lat)) continue;
+
+        const props = f.properties || {};
+        const name = getProp(props, ["name","id","site","label","LSOA21NM","LSOA11NM"], "Demand centroid");
+
+        const ll = new google.maps.LatLng(lat, lng);
+        const rec = joinPointToLSOA(ll);
+
+        const pop = rec ? num(rec.pop, NaN) : NaN;
+        const demandFallback = rec ? num(rec.demandFallback, NaN) : num(getProp(props, FIELD.demand, NaN), NaN);
+        const demandRaw = rec ? num(rec.demandRaw, 1) : demandFromLSOA(pop, demandFallback);
+
+        const equityRaw = rec ? num(rec.equityRaw, 0) : 0;
+        const penaltyRaw = rec ? num(rec.penaltyRaw, 0) : 0;
+        const gapRaw = rec ? num(rec.gap01, 0) : 0;
+
+        const medianAge = rec ? num(rec.medianAge, NaN) : NaN;
+
+        candPts.push({
+          lat:lat, lng:lng, name:name,
+          demandRaw:demandRaw, demandFallback: demandFallback,
+          equityRaw:equityRaw, penaltyRaw:penaltyRaw, gapRaw:gapRaw,
+          lsoaCode: rec ? rec.code : "",
+          pop: pop, medianAge: medianAge,
+
+          wimd_norm: rec ? rec.wimd_norm : NaN,
+          wimd_rank: rec ? rec.wimd_rank : NaN,
+          wimd_decile: rec ? rec.wimd_decile : NaN,
+          parking_constraint: rec ? rec.parking_constraint : NaN,
+          share_flats: rec ? rec.share_flats : NaN,
+          share_dense: rec ? rec.share_dense : NaN,
+          share_rented: rec ? rec.share_rented : NaN,
+          share_no_car: rec ? rec.share_no_car : NaN,
+
+          distToExistingM: NaN,
+          scoreBase: 0,
+          score: 0
+        });
+      }
+
+      computeDistancesToExisting();
+      rebuildDistanceAndCoverage();
+      computeLocalScoreBase();
+
+      // initial KPI
+      const year = String(document.getElementById("yearSel").value || "2030");
+      const supplyTotal = computeSupplyTotal();
+      document.getElementById("k_supply").textContent = String(Math.round(supplyTotal));
+      document.getElementById("k_target").textContent = String(Math.round(num(TARGET_BY_YEAR[year], 1500)));
+      document.getElementById("k_gap").textContent = "–";
+
+      map.fitBounds(CARDIFF_BOUNDS);
+
+      setStatus(
+        "Loaded.\n" +
+        "Supply points: " + supplyPts.length + "\n" +
+        "LSOA polygons (enriched): " + (lsoa.features||[]).length + "\n" +
+        "Candidates: " + candPts.length + "\n" +
+        "p10 overlay: " + ((ENABLE_P10_OVERLAY && solution) ? "loaded" : "disabled") + "\n\n" +
+        "Next: Run scenario (Top P) → then open Scoring tab."
+      );
+
+      updateWeightUI();
+
+    } catch(err){
+      console.error(err);
+      setStatus("FAILED.\n" + String(err) + "\n\nTip: open via local server (not file://).");
+      alert(String(err));
+    }
+  }
+
+  window.initMap = initMap;
+
+  (function loadGoogleMaps(){
+    const s = document.createElement("script");
+    s.src = "https://maps.googleapis.com/maps/api/js?key=" + encodeURIComponent(GMAPS_KEY) +
+            "&callback=initMap&v=weekly&libraries=geometry&loading=async";
+    s.async = true; s.defer = true;
+    document.head.appendChild(s);
+  })();
+</script>
+</body>
+</html>
