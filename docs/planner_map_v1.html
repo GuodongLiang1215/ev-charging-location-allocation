@@ -1,0 +1,1380 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Cardiff EV Charging – Planner View (v1)</title>
+  <style>
+    html, body { height:100%; margin:0; font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    #map { height:100%; width:100%; }
+    #map img { max-width:none !important; }
+
+    .panel{
+      position:absolute; top:12px; left:12px; z-index:5;
+      background:rgba(255,255,255,0.96);
+      border:1px solid #ddd; border-radius:14px;
+      padding:12px; width:500px;
+      box-shadow:0 4px 18px rgba(0,0,0,0.12);
+      max-height: calc(100vh - 24px);
+      overflow:auto;
+    }
+    .title{ font-weight:900; font-size:20px; margin:0 0 10px; }
+    .row{ display:flex; align-items:center; gap:10px; margin:8px 0; flex-wrap:wrap; }
+    .small{ color:#374151; font-size:12px; }
+    .muted{ color:#6b7280; font-size:12px; }
+    .btn{
+      background:#111827; color:#fff; border:none; border-radius:10px;
+      padding:10px 12px; cursor:pointer; font-size:13px; font-weight:900;
+    }
+    .btn.secondary{ background:#6b7280; }
+    .btn:disabled{ opacity:0.5; cursor:not-allowed; }
+
+    .input, select{
+      border:1px solid #e5e7eb; border-radius:10px;
+      padding:10px 12px; outline:none; font-size:13px; background:#fff;
+    }
+
+    .kpis{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:8px; }
+    .card{ border:1px solid #eee; border-radius:12px; padding:10px 12px; background:#fff; }
+    .card .h{ font-size:12px; color:#6b7280; margin-bottom:6px; }
+    .card .v{ font-size:18px; font-weight:900; color:#111827; }
+
+    .section{ margin-top:10px; padding-top:10px; border-top:1px solid #eee; }
+    .pill{
+      display:inline-flex; align-items:center;
+      border:1px solid #e5e7eb; border-radius:999px;
+      padding:6px 10px; font-size:12px; background:#fff;
+      cursor:pointer;
+    }
+    .pill.active{ background:#111827; color:#fff; border-color:#111827; }
+
+    .list{ margin-top:8px; max-height:240px; overflow:auto; border:1px solid #eee; border-radius:12px; background:#fff; }
+    .item{ padding:10px 12px; border-bottom:1px solid #f1f5f9; cursor:pointer; }
+    .item:hover{ background:#f8fafc; }
+    .item:last-child{ border-bottom:none; }
+    .itemTitle{ font-weight:900; font-size:13px; margin-bottom:4px; }
+    .itemMeta{ font-size:12px; color:#374151; display:flex; gap:10px; flex-wrap:wrap; }
+    .badge{
+      display:inline-flex; align-items:center;
+      padding:2px 8px; border-radius:999px;
+      border:1px solid #e5e7eb; font-size:12px; color:#111827;
+      background:#fff;
+    }
+
+    .status{ margin-top:8px; font-size:12px; color:#111827; white-space:pre-wrap; }
+    .legend{ margin-top:10px; font-size:12px; line-height:1.35; }
+    .swatch{ display:inline-block; width:12px; height:12px; border-radius:999px; margin-right:8px; border:2px solid rgba(255,255,255,0.9); box-shadow:0 0 0 1px rgba(0,0,0,0.12); }
+
+    /* scoring bars */
+    .barRow{ display:flex; align-items:center; gap:10px; margin-top:6px; }
+    .barTrack{ flex:1; height:10px; border-radius:999px; background:#eef2ff; overflow:hidden; border:1px solid #e5e7eb; }
+    .barFill{ height:100%; }
+    .tiny{ font-size:11px; color:#6b7280; }
+    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    details summary{ cursor:pointer; font-weight:800; }
+  </style>
+</head>
+
+<body>
+<div id="map"></div>
+
+<div class="panel">
+  <div class="title">Planner view (Cardiff) – v1</div>
+  <div class="muted">
+    Data: existing chargers (OCM) + LSOA boundary (<b>enriched: WIMD + census proxies</b>) + demand centroids as candidates.
+  </div>
+
+  <div class="section">
+    <div style="font-weight:900; margin-bottom:6px;">Scenario (Top P) + scoring</div>
+    <div class="row">
+      <label class="small">Target year</label>
+      <select id="yearSel">
+        <option value="2026">2026</option>
+        <option value="2030" selected>2030</option>
+        <option value="2035">2035</option>
+      </select>
+
+      <label class="small">Add P</label>
+      <input id="pSel" class="input" style="width:90px" type="number" min="1" value="10"/>
+
+      <button id="btnRun" class="btn">Run scenario</button>
+    </div>
+
+    <div class="row">
+      <span class="pill active" id="tabKpi">KPIs</span>
+      <span class="pill" id="tabGap">Gap map</span>
+      <span class="pill" id="tabScore">Scoring</span>
+    </div>
+
+    <div class="row">
+      <label class="small"><input id="ckSupply" type="checkbox" checked> Existing chargers</label>
+      <label class="small"><input id="ckLSOA" type="checkbox" checked> LSOA boundary</label>
+      <label class="small"><input id="ckCandidates" type="checkbox" checked> Candidates</label>
+      <label class="small"><input id="ckSelected" type="checkbox" checked> Selected (Top P)</label>
+      <span id="ckSolutionWrap" style="display:none;">
+        <label class="small"><input id="ckSolution" type="checkbox"> p10 overlay</label>
+      </span>
+    </div>
+
+    <div class="row">
+      <button id="btnExportCsv" class="btn secondary" disabled>Export shortlist (CSV)</button>
+      <button id="btnExportGeo" class="btn secondary" disabled>Export shortlist (GeoJSON)</button>
+      <button id="btnPrint" class="btn secondary">Print</button>
+    </div>
+
+    <div class="muted">
+      <b>Score (transparent)</b><br/>
+      <span class="mono" id="scoreFormulaInline">–</span><br/>
+      Demand: population (preferred) → fallback to other demand-like fields.<br/>
+      Equity: prefers <span class="mono">equity_proxy / wimd_norm</span> (higher = more deprived / higher priority).<br/>
+      Cost/Constraints: prefers <span class="mono">parking_constraint</span> (0–1, higher = more constrained).<br/>
+      Coverage: a candidate is “covered” if it’s within service radius D of any selected site.
+    </div>
+
+    <details style="margin-top:8px;">
+      <summary class="small">Advanced options (coverage radius D, spacing, selection mode)</summary>
+      <div class="row" style="margin-top:10px;">
+        <label class="small" style="min-width:140px;">Service radius D (km)</label>
+        <input id="svcKm" class="input" style="width:90px" type="number" min="0.2" step="0.1" value="1.5"/>
+        <span class="muted">Used for KPI coverage & redundancy transforms.</span>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:140px;">Min spacing (m)</label>
+        <input id="minSpacing" class="input" style="width:90px" type="number" min="0" step="50" value="700"/>
+        <label class="small"><input id="ckSpread" type="checkbox" checked> enforce spread</label>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:140px;">Selection mode</label>
+        <select id="selMode">
+          <option value="rank" selected>Rank by score (fast)</option>
+          <option value="greedy">Greedy + spacing (more spread)</option>
+        </select>
+      </div>
+    </details>
+  </div>
+
+  <!-- Scoring tab panel -->
+  <div class="section" id="scorePanel" style="display:none;">
+    <div style="font-weight:900; margin-bottom:6px;">Scoring breakdown</div>
+
+    <div class="row">
+      <label class="small" style="min-width:120px;">Score mode</label>
+      <select id="scoreMode">
+        <option value="linear" selected>Linear (benefit − cost)</option>
+        <option value="ga">GA-style (benefit × affordability)</option>
+      </select>
+      <span class="badge mono" id="scoreFormula"></span>
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <label class="small" style="min-width:120px;">Demand weight</label>
+      <input id="wDemand" type="range" min="0" max="1" step="0.01" value="0.45" style="flex:1;">
+      <span class="badge" id="wDemandVal">0.45</span>
+    </div>
+
+    <div class="row">
+      <label class="small" style="min-width:120px;">Equity weight</label>
+      <input id="wEquity" type="range" min="0" max="1" step="0.01" value="0.30" style="flex:1;">
+      <span class="badge" id="wEquityVal">0.30</span>
+    </div>
+
+    <div class="row">
+      <label class="small" style="min-width:120px;">Underserved (gap)</label>
+      <input id="wGap" type="range" min="0" max="1" step="0.01" value="0.25" style="flex:1;">
+      <span class="badge" id="wGapVal">0.25</span>
+    </div>
+
+    <div class="row">
+      <label class="small" style="min-width:120px;">Constraint cost</label>
+      <input id="wPenalty" type="range" min="0" max="1" step="0.01" value="0.25" style="flex:1;">
+      <span class="badge" id="wPenaltyVal">0.25</span>
+    </div>
+
+    <div class="row">
+      <label class="small" style="min-width:120px;">Near-existing penalty</label>
+      <input id="wNear" type="range" min="0" max="1" step="0.01" value="0.20" style="flex:1;">
+      <span class="badge" id="wNearVal">0.20</span>
+    </div>
+
+    <div class="row">
+      <label class="small" style="min-width:120px;">Cluster penalty</label>
+      <input id="wCluster" type="range" min="0" max="1" step="0.01" value="0.25" style="flex:1;">
+      <span class="badge" id="wClusterVal">0.25</span>
+    </div>
+
+    <div class="muted" style="margin-top:6px;">
+      Notes:
+      <ul style="margin:6px 0 0 18px; padding:0;">
+        <li>Demand / Equity / Gap normalized to 0–1 and re-normalized to sum to 1 (interpretable benefit).</li>
+        <li>Constraint / Near-existing / Cluster are costs (0–1). “Near-existing” is high if candidate is close to an existing charger.</li>
+        <li>Gap comes from LSOA “high demand + low provision” (switch to Gap map tab to see it).</li>
+      </ul>
+    </div>
+
+    <div class="kpis" style="margin-top:10px;">
+      <div class="card"><div class="h">Coverage (demand-weighted)</div><div class="v" id="k_cov">–</div></div>
+      <div class="card"><div class="h">Avg dist to existing (m)</div><div class="v" id="k_dexist">–</div></div>
+      <div class="card"><div class="h">Avg penalty (Top P)</div><div class="v" id="k_pavg">–</div></div>
+      <div class="card"><div class="h">Avg score (Top P)</div><div class="v" id="k_savg">–</div></div>
+    </div>
+
+    <div class="row" style="justify-content:space-between; margin-top:10px;">
+      <div style="font-weight:900;">Top P decomposition</div>
+      <span class="badge" id="scoreCountBadge">0</span>
+    </div>
+
+    <div class="list" id="scoreList"></div>
+  </div>
+
+  <div class="section">
+    <div style="font-weight:900; margin-bottom:6px;">Needs & gap dashboard</div>
+    <div class="kpis">
+      <div class="card"><div class="h">Current supply (sockets or points)</div><div class="v" id="k_supply">–</div></div>
+      <div class="card"><div class="h">Target sockets (year)</div><div class="v" id="k_target">–</div></div>
+      <div class="card"><div class="h">Gap (target - supply)</div><div class="v" id="k_gap">–</div></div>
+      <div class="card"><div class="h">Selected sites (Top P)</div><div class="v" id="k_selected">0</div></div>
+    </div>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="section">
+    <div class="row" style="justify-content:space-between;">
+      <div style="font-weight:900;">Shortlist (Top P)</div>
+      <span class="badge" id="countBadge">0</span>
+    </div>
+    <div class="muted" id="emptyHint">Run scenario to generate shortlist.</div>
+    <div class="list" id="resultList" style="display:none;"></div>
+  </div>
+
+  <div class="legend">
+    <b>Legend</b><br/>
+    <div><span class="swatch" style="background:#2563eb;"></span>Blue: existing chargers</div>
+    <div><span class="swatch" style="background:#f59e0b;"></span>Orange: candidate demand centroids</div>
+    <div><span class="swatch" style="background:#ef4444;"></span>Red star: selected (Top P)</div>
+    <div><span class="swatch" style="background:#7c3aed;"></span>Purple triangle: p10 overlay (optional)</div>
+    <div class="muted" style="margin-top:6px;">Gap map colors LSOA by high demand + low provision.</div>
+  </div>
+</div>
+
+<script>
+  // ===============================
+  // 0) CONFIG
+  // ===============================
+  const GMAPS_KEY = "AIzaSyAUproFl8jRStUlFwOKbQ8yh2CjNJ_H2c4";
+
+  // If you want to show p10 overlay, set ENABLE_P10_OVERLAY = true and keep the file path valid.
+  const ENABLE_P10_OVERLAY = false;
+
+  const BASE = new URL("./", window.location.href);
+
+  const DATA_URLS = {
+    supply:     new URL("data/processed/supply_chargers_ocm.geojson", BASE).href,
+    lsoa:       new URL("data/processed/demand_lsoa_cardiff_exact_pop_wgs84_enriched.geojson", BASE).href,
+    candidates: new URL("data/processed/demand_points_cardiff_exact_pop_wgs84.geojson", BASE).href,
+    solution:   new URL("data/processed/new_sites_p10.geojson", BASE).href
+  };
+
+  const CARDIFF_BOUNDS = { north: 51.566, south: 51.410, east: -3.065, west: -3.333 };
+  const TARGET_BY_YEAR = { "2026": 700, "2030": 1500, "2035": 2000 };
+
+  // ===============================
+  // 1) FIELD MAPS (support enriched properties)
+  // ===============================
+  const FIELD = {
+    // LSOA identity
+    code:   ["LSOA21CD","lsoa21cd","LSOA11CD","lsoa11cd","code","id"],
+
+    // Demand proxies
+    pop:    ["population","pop","pop_total","Pop","total_pop","Total"],
+    demand: ["demand","demand_score","ev_owners","owners","weight"],
+
+    // Equity proxies (WIMD preferred)
+    equity_proxy: ["equity_proxy","equity_wimd","equity_norm"],
+    wimd_norm:    ["wimd_norm","imd_norm","wimd2019_norm"],
+    wimd_rank:    ["wimd_rank","imd_rank","wimd2019_rank"],
+    wimd_decile:  ["wimd_decile","imd_decile","wimd2019_decile"],
+    median_age:   ["median_age","median age","Median age mid-2024","Median age mid-2023","Median age mid-2022"],
+
+    // Penalty proxies (parking/install constraints)
+    parking_constraint: ["parking_constraint","constraint","install_constraint"],
+    share_flats:  ["share_flats","pct_flats","flats_share"],
+    share_dense:  ["share_dense","pct_dense","dense_share","share_terraced","pct_terraced"],
+    share_rented: ["share_rented","pct_rented","rented_share"],
+    share_no_car: ["share_no_car","pct_no_car","no_car_share"],
+
+    // supply
+    sockets:["sockets","SocketCount","socket_count","connectors","num_sockets","units"],
+    name:   ["name","operator","location","Site","address","Address"]
+  };
+
+  // ===============================
+  // 2) STATE
+  // ===============================
+  let map, info;
+  let supplyLayer, lsoaLayer, candLayer, selectedLayer, solutionLayer;
+
+  let lsoaIndex = [];   // [{code, demandRaw, equityRaw, penaltyRaw, polygons, feature}]
+  let supplyPts = [];
+  let candPts = [];
+  let selected = [];
+  let activeTab = "kpi";
+
+  // ===============================
+  // 3) UTILS
+  // ===============================
+  function setStatus(msg){ document.getElementById("status").textContent = msg || ""; }
+
+  function escapeHtml(s){
+    return String(s||"").replace(/[&<>"']/g, function(c){
+      return ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]);
+    });
+  }
+  function num(x, fb=0){ const v=Number(x); return Number.isFinite(v)? v: fb; }
+  function clamp01(x){ return Math.max(0, Math.min(1, x)); }
+
+  // some shares might be in 0..100; convert to 0..1
+  function pctTo01(x){
+    const v = num(x, NaN);
+    if(!Number.isFinite(v)) return NaN;
+    return (v > 1.0001) ? clamp01(v/100) : clamp01(v);
+  }
+
+  function getProp(props, keys, fb=null){
+    for(const k of keys){
+      if(props && props[k] !== undefined && props[k] !== null && props[k] !== "") return props[k];
+    }
+    return fb;
+  }
+
+  async function loadGeoJSON(url){
+    const res = await fetch(url,{cache:"no-store"});
+    if(!res.ok) throw new Error("Fetch failed: " + res.status + " " + url);
+    return await res.json();
+  }
+
+  async function loadGeoJSONOptional(url){
+    try{ return await loadGeoJSON(url); } catch(e){ return null; }
+  }
+
+  function looksLike27700(lng, lat){
+    return Math.abs(lng) > 1000 || Math.abs(lat) > 1000;
+  }
+
+  // Haversine distance (meters)
+  function distMeters(aLat, aLng, bLat, bLng){
+    const R = 6371000;
+    const toRad = (x)=> x * Math.PI / 180;
+    const dLat = toRad(bLat - aLat);
+    const dLng = toRad(bLng - aLng);
+    const s1 = Math.sin(dLat/2), s2 = Math.sin(dLng/2);
+    const q = s1*s1 + Math.cos(toRad(aLat))*Math.cos(toRad(bLat))*s2*s2;
+    return 2*R*Math.asin(Math.min(1, Math.sqrt(q)));
+  }
+
+  // --- symbols ---
+  function iconCircle(fill, scale, strokeW){
+    return { path: google.maps.SymbolPath.CIRCLE, fillColor:fill, fillOpacity:1,
+      strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:strokeW, scale: scale };
+  }
+  function iconStar(fill, scale){
+    return { path:"M 0,-10 L 2,-3 L 10,-3 L 4,1 L 6,9 L 0,4 L -6,9 L -4,1 L -10,-3 L -2,-3 Z",
+      fillColor:fill, fillOpacity:0.95, strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:1, scale:scale };
+  }
+  function iconTriangle(fill){
+    return { path: google.maps.SymbolPath.BACKWARD_CLOSED_ARROW, fillColor:fill, fillOpacity:0.95,
+      strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:1, scale:6 };
+  }
+
+  // ===============================
+  // 4) SCORING MEANING (Equity/Penalty)
+  // ===============================
+  function computeEquityFromProps(props, fallbackMedianAge){
+    // priority 1: equity_proxy (already prepared by your join script)
+    const equityProxy = getProp(props, FIELD.equity_proxy, null);
+    if(equityProxy !== null) return num(equityProxy, 0);
+
+    // priority 2: wimd_norm (0..1, higher = more deprived)
+    const wimdNorm = getProp(props, FIELD.wimd_norm, null);
+    if(wimdNorm !== null) return num(wimdNorm, 0);
+
+    // priority 3: wimd_rank or decile -> convert to "higher = more deprived"
+    const r = num(getProp(props, FIELD.wimd_rank, NaN), NaN);
+    if(Number.isFinite(r)){
+      // invert direction: smaller rank => higher priority; we return negative rank then normalize later
+      return -r;
+    }
+
+    const d = num(getProp(props, FIELD.wimd_decile, NaN), NaN);
+    if(Number.isFinite(d)){
+      // decile: 1 most deprived -> equity higher
+      return (11 - d) / 10;
+    }
+
+    // fallback: median age proxy
+    return Number.isFinite(fallbackMedianAge) ? fallbackMedianAge : 0;
+  }
+
+  function computePenaltyFromProps(props){
+    // priority 1: parking_constraint directly (0..1)
+    const pc = getProp(props, FIELD.parking_constraint, null);
+    if(pc !== null){
+      const v = pctTo01(pc);
+      if(Number.isFinite(v)) return v;
+    }
+
+    // priority 2: derive from shares (0..1)
+    const flats  = pctTo01(getProp(props, FIELD.share_flats, NaN));
+    const dense  = pctTo01(getProp(props, FIELD.share_dense, NaN));
+    const rented = pctTo01(getProp(props, FIELD.share_rented, NaN));
+    const nocar  = pctTo01(getProp(props, FIELD.share_no_car, NaN));
+
+    const arr = [flats,dense,rented,nocar].filter(Number.isFinite);
+    if(arr.length === 0) return 0;
+
+    // Weighted sum (tunable)
+    const wFlats = 0.40, wDense = 0.25, wRented = 0.25, wNoCar = 0.10;
+    const val =
+      (Number.isFinite(flats)  ? wFlats*flats  : 0) +
+      (Number.isFinite(dense)  ? wDense*dense  : 0) +
+      (Number.isFinite(rented) ? wRented*rented: 0) +
+      (Number.isFinite(nocar)  ? wNoCar*nocar  : 0);
+
+    return clamp01(val);
+  }
+
+  // ===============================
+  // 5) SCORING UI HELPERS
+  // ===============================
+  function setScorePanelVisible(){
+    const el = document.getElementById("scorePanel");
+    if(!el) return;
+    el.style.display = (activeTab === "score") ? "block" : "none";
+  }
+
+  function getWeights(){
+    // Benefit weights (demand/equity/gap) -> normalized to sum 1
+    let wd = num(document.getElementById("wDemand").value, 0.45);
+    let we = num(document.getElementById("wEquity").value, 0.30);
+    let wg = num(document.getElementById("wGap").value,    0.25);
+    const sumB = wd + we + wg;
+    if(sumB > 0){ wd/=sumB; we/=sumB; wg/=sumB; }
+    else { wd=0.34; we=0.33; wg=0.33; }
+
+    // Cost weights (independent)
+    let wp = num(document.getElementById("wPenalty").value, 0.25);
+    let wn = num(document.getElementById("wNear").value,    0.20);
+    let wc = num(document.getElementById("wCluster").value, 0.25);
+
+    return { wd, we, wg, wp, wn, wc };
+  }
+
+  function updateWeightUI(){
+    const w = getWeights();
+    document.getElementById("wDemandVal").textContent  = w.wd.toFixed(2);
+    document.getElementById("wEquityVal").textContent  = w.we.toFixed(2);
+    document.getElementById("wGapVal").textContent     = w.wg.toFixed(2);
+    document.getElementById("wPenaltyVal").textContent = w.wp.toFixed(2);
+    document.getElementById("wNearVal").textContent    = w.wn.toFixed(2);
+    document.getElementById("wClusterVal").textContent = w.wc.toFixed(2);
+
+    const mode = document.getElementById("scoreMode").value || "linear";
+    const formula = document.getElementById("scoreFormula");
+    const inline = document.getElementById("scoreFormulaInline");
+
+    let txt = "";
+    if(mode === "ga"){
+      txt =
+        "Score = Benefit × (1 − Cost),  Benefit = " +
+        w.wd.toFixed(2) + "·D + " + w.we.toFixed(2) + "·E + " + w.wg.toFixed(2) + "·Gap; " +
+        "Cost = " + w.wp.toFixed(2) + "·Constr + " + w.wn.toFixed(2) + "·Near + " + w.wc.toFixed(2) + "·Cluster";
+    } else {
+      txt =
+        "Score = Benefit − Cost,  Benefit = " +
+        w.wd.toFixed(2) + "·D + " + w.we.toFixed(2) + "·E + " + w.wg.toFixed(2) + "·Gap; " +
+        "Cost = " + w.wp.toFixed(2) + "·Constr + " + w.wn.toFixed(2) + "·Near + " + w.wc.toFixed(2) + "·Cluster";
+    }
+    formula.textContent = txt;
+    inline.textContent = txt;
+  }
+
+  function renderScoreTab(){
+    const scoreList = document.getElementById("scoreList");
+    const badge = document.getElementById("scoreCountBadge");
+    if(!scoreList || !badge) return;
+
+    if(!selected || selected.length === 0){
+      badge.textContent = "0";
+      scoreList.innerHTML =
+        '<div class="item"><div class="itemTitle">No shortlist yet</div>' +
+        '<div class="muted">Click <b>Run scenario</b> first, then adjust sliders.</div></div>';
+      document.getElementById("k_cov").textContent = "–";
+      document.getElementById("k_dexist").textContent = "–";
+      document.getElementById("k_pavg").textContent = "–";
+      document.getElementById("k_savg").textContent = "–";
+      return;
+    }
+
+    badge.textContent = String(selected.length);
+
+    const avg = (arr)=> arr.reduce((a,b)=>a+b,0)/Math.max(1,arr.length);
+    const pavg = avg(selected.map(x=>num(x.costConstr01,0)));
+    const savg = avg(selected.map(x=>num(x.score,0)));
+    const dexist = avg(selected.map(x=>num(x.distToExistingM, NaN)).filter(Number.isFinite));
+
+    document.getElementById("k_pavg").textContent = (pavg*100).toFixed(0);
+    document.getElementById("k_savg").textContent = savg.toFixed(3);
+    document.getElementById("k_dexist").textContent = Number.isFinite(dexist) ? String(Math.round(dexist)) : "–";
+
+    scoreList.innerHTML = "";
+    selected.forEach((c, idx)=>{
+      const div = document.createElement("div");
+      div.className = "item";
+
+      const title = document.createElement("div");
+      title.className = "itemTitle";
+      title.textContent = (idx+1) + ". " + (c.name || "Candidate") + " (score=" + c.score.toFixed(3) + ")";
+
+      const meta = document.createElement("div");
+      meta.className = "itemMeta";
+      meta.innerHTML =
+        '<span class="badge">D ' + (c.d01*100).toFixed(0) + '</span>' +
+        '<span class="badge">E ' + (c.e01*100).toFixed(0) + '</span>' +
+        '<span class="badge">Gap ' + (c.g01*100).toFixed(0) + '</span>' +
+        '<span class="badge">Constr ' + (c.costConstr01*100).toFixed(0) + '</span>' +
+        '<span class="badge">Near ' + (c.costNear01*100).toFixed(0) + '</span>' +
+        '<span class="badge">LSOA ' + escapeHtml(c.lsoaCode || "n/a") + '</span>';
+
+      const clampPct = (x)=> Math.max(0, Math.min(100, x*100));
+
+      const bars1 = document.createElement("div");
+      bars1.className = "barRow";
+      bars1.innerHTML =
+        '<span class="tiny" style="width:66px;">Benefit</span>' +
+        '<div class="barTrack"><div class="barFill" style="width:' + clampPct(c.benefit) + '%; background:#2563eb;"></div></div>' +
+        '<span class="tiny mono" style="width:66px; text-align:right;">' + c.benefit.toFixed(3) + '</span>';
+
+      const bars2 = document.createElement("div");
+      bars2.className = "barRow";
+      bars2.innerHTML =
+        '<span class="tiny" style="width:66px;">Cost</span>' +
+        '<div class="barTrack"><div class="barFill" style="width:' + clampPct(c.cost) + '%; background:#6b7280;"></div></div>' +
+        '<span class="tiny mono" style="width:66px; text-align:right;">' + c.cost.toFixed(3) + '</span>';
+
+      div.appendChild(title);
+      div.appendChild(meta);
+      div.appendChild(bars1);
+      div.appendChild(bars2);
+
+      div.addEventListener("click", function(){ focusCandidate(c); });
+      scoreList.appendChild(div);
+    });
+  }
+
+  // ===============================
+  // 6) TABS & CHOROPLETH
+  // ===============================
+  function setTab(tab){
+    activeTab = tab;
+    document.getElementById("tabKpi").classList.toggle("active", tab==="kpi");
+    document.getElementById("tabGap").classList.toggle("active", tab==="gap");
+    document.getElementById("tabScore").classList.toggle("active", tab==="score");
+
+    setScorePanelVisible();
+    styleLSOA();
+
+    if(activeTab === "score"){
+      updateWeightUI();
+      renderScoreTab();
+    }
+  }
+
+  function styleLSOA(){
+    if(!lsoaLayer) return;
+
+    if(activeTab === "gap"){
+      lsoaLayer.setStyle(function(ft){
+        const s = num(ft.getProperty("_gapScore"), 0);
+        let fill = "#10b981";
+        if(s > 0.66) fill = "#f87171";
+        else if(s > 0.33) fill = "#f59e0b";
+        return {
+          fillColor: fill,
+          fillOpacity: 0.42,
+          strokeColor: "#111827",
+          strokeOpacity: 0.75,
+          strokeWeight: 2.5
+        };
+      });
+    } else {
+      lsoaLayer.setStyle({
+        fillColor: "#93c5fd",
+        fillOpacity: 0.18,
+        strokeColor: "#2563eb",
+        strokeOpacity: 0.85,
+        strokeWeight: 2.5
+      });
+    }
+  }
+
+  // ===============================
+  // 7) GEOMETRY HELPERS
+  // ===============================
+  function makePolygonsFromGeometry(geom){
+    const polys = [];
+    if(!geom) return polys;
+
+    const toPath = (ring) => ring.map(function(x){ return {lat:x[1], lng:x[0]}; });
+    const buildPoly = (rings) => {
+      const paths = rings.map(toPath);
+      return new google.maps.Polygon({ paths: paths });
+    };
+
+    if(geom.type === "Polygon"){
+      polys.push(buildPoly(geom.coordinates));
+    } else if(geom.type === "MultiPolygon"){
+      for(const poly of geom.coordinates){
+        polys.push(buildPoly(poly));
+      }
+    }
+    return polys;
+  }
+
+  function containsAny(polys, latLng){
+    for(const p of polys){
+      if(google.maps.geometry.poly.containsLocation(latLng, p)) return true;
+    }
+    return false;
+  }
+
+  function joinPointToLSOA(latLng){
+    for(const rec of lsoaIndex){
+      if(containsAny(rec.polygons, latLng)) return rec;
+    }
+    return null;
+  }
+
+  function normalize01(arr){
+    let mn=Infinity, mx=-Infinity;
+    for(const v of arr){
+      if(!Number.isFinite(v)) continue;
+      mn=Math.min(mn,v); mx=Math.max(mx,v);
+    }
+    if(!Number.isFinite(mn) || !Number.isFinite(mx) || mn===mx) return { norm: (_)=>0.5 };
+    return { norm: (x)=> (x-mn)/(mx-mn) };
+  }
+
+  // ===============================
+  // 8) KPI / GAP
+  // ===============================
+  function computeSupplyTotal(){
+    let sum = 0;
+    for(const p of supplyPts) sum += num(p.sockets, 0);
+    if(sum === 0 && supplyPts.length) sum = supplyPts.length;
+    return sum;
+  }
+
+  function computeLSOAGapScores(){
+    // supply per LSOA (rough spatial join)
+    const supplyByLSOA = new Map();
+    for(const s of supplyPts){
+      const ll = new google.maps.LatLng(s.lat, s.lng);
+      const rec = joinPointToLSOA(ll);
+      if(!rec) continue;
+      const prev = supplyByLSOA.get(rec.code) || 0;
+      supplyByLSOA.set(rec.code, prev + num(s.sockets, 1));
+    }
+
+    const demandArr = [];
+    const supplyArr = [];
+
+    for(const rec of lsoaIndex){
+      const sup = supplyByLSOA.get(rec.code) || 0;
+      rec.supplyRaw = sup;
+      demandArr.push(num(rec.demandRaw, 0));
+      supplyArr.push(num(rec.supplyRaw, 0));
+    }
+
+    const nd = normalize01(demandArr);
+    const ns = normalize01(supplyArr);
+
+    for(const rec of lsoaIndex){
+      if(!rec.feature) continue;
+      const d01 = nd.norm(num(rec.demandRaw, 0));
+      const s01 = ns.norm(num(rec.supplyRaw, 0));
+      const g = Math.max(0, Math.min(1, d01 - 0.7*s01)); // underserved = high demand and low supply
+      rec.gap01 = g;
+      rec.feature.setProperty("_gapScore", g);
+    }
+  }
+
+  function getServiceRadiusM(){
+    const km = Math.max(0.2, num(document.getElementById("svcKm").value, 1.5));
+    return km * 1000;
+  }
+
+  // ===============================
+  // 9) SELECTION + UI LIST
+  // ===============================
+  function updateSelectedLayer(){
+    selectedLayer.forEach(function(ft){ selectedLayer.remove(ft); });
+    const fc = {
+      type:"FeatureCollection",
+      features: selected.map(function(c, i){
+        return {
+          type:"Feature",
+          geometry:{ type:"Point", coordinates:[c.lng, c.lat] },
+          properties:{
+            rank:i+1,
+            name:c.name||"Selected",
+            score:c.score,
+            d01:c.d01, e01:c.e01, g01:c.g01,
+            constr:c.costConstr01,
+            near:c.costNear01,
+            cluster:c.costCluster01,
+            lsoa:c.lsoaCode||"",
+            population: c.pop ?? null,
+            median_age: c.medianAge ?? null,
+            dist_to_existing_m: c.distToExistingM ?? null
+          }
+        };
+      })
+    };
+    selectedLayer.addGeoJson(fc);
+  }
+
+  function focusCandidate(c){
+    map.panTo({lat:c.lat, lng:c.lng});
+    map.setZoom(Math.max(map.getZoom(), 14));
+
+    const pct = (x)=> Number.isFinite(x) ? Math.round(x*100) : null;
+
+    const badges = [];
+    if(Number.isFinite(c.distToExistingM)) badges.push("dist_to_existing " + Math.round(c.distToExistingM) + "m");
+    if(Number.isFinite(c.parking_constraint)) badges.push("parking_constraint " + c.parking_constraint.toFixed(2));
+    if(Number.isFinite(c.share_flats)) badges.push("share_flats " + Math.round(c.share_flats*100) + "%");
+    if(Number.isFinite(c.share_dense)) badges.push("share_dense " + Math.round(c.share_dense*100) + "%");
+    if(Number.isFinite(c.share_rented)) badges.push("share_rented " + Math.round(c.share_rented*100) + "%");
+    if(Number.isFinite(c.share_no_car)) badges.push("share_no_car " + Math.round(c.share_no_car*100) + "%");
+    if(Number.isFinite(c.wimd_rank)) badges.push("wimd_rank " + Math.round(c.wimd_rank));
+    if(Number.isFinite(c.wimd_decile)) badges.push("wimd_decile " + Math.round(c.wimd_decile));
+
+    info.setContent(
+      "<b>" + escapeHtml(c.name||"Selected") + "</b><br/>" +
+      "Score: " + escapeHtml(c.score.toFixed(3)) + "<br/>" +
+      "Demand: " + pct(c.d01) + " | Equity: " + pct(c.e01) + " | Gap: " + pct(c.g01) + "<br/>" +
+      "Cost(Constr/Near/Cluster): " + pct(c.costConstr01) + " / " + pct(c.costNear01) + " / " + pct(c.costCluster01) + "<br/>" +
+      "LSOA: " + escapeHtml(c.lsoaCode||"n/a") + "<br/>" +
+      "Population: " + (Number.isFinite(c.pop)? Math.round(c.pop): "n/a") + "<br/>" +
+      "Median age: " + (Number.isFinite(c.medianAge)? c.medianAge.toFixed(1): "n/a") + "<br/>" +
+      (badges.length ? '<div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">' +
+        badges.map(function(b){ return '<span class="badge">' + escapeHtml(b) + "</span>"; }).join("") +
+        "</div>" : "")
+    );
+    info.setPosition({lat:c.lat, lng:c.lng});
+    info.open({map});
+  }
+
+  function renderList(){
+    const list = document.getElementById("resultList");
+    const empty = document.getElementById("emptyHint");
+    const badge = document.getElementById("countBadge");
+    badge.textContent = String(selected.length);
+
+    if(!selected.length){
+      list.style.display="none";
+      empty.style.display="block";
+      return;
+    }
+    empty.style.display="none";
+    list.style.display="block";
+    list.innerHTML="";
+
+    selected.forEach(function(c, idx){
+      const div = document.createElement("div");
+      div.className="item";
+
+      const t = document.createElement("div");
+      t.className="itemTitle";
+      t.textContent = (idx+1) + ". " + (c.name || "Candidate");
+
+      const metaBadges = [];
+      metaBadges.push('<span class="badge">Score: ' + escapeHtml(c.score.toFixed(3)) + "</span>");
+      metaBadges.push('<span class="badge">D ' + Math.round(c.d01*100) + "</span>");
+      metaBadges.push('<span class="badge">E ' + Math.round(c.e01*100) + "</span>");
+      metaBadges.push('<span class="badge">Gap ' + Math.round(c.g01*100) + "</span>");
+      metaBadges.push('<span class="badge">LSOA: ' + escapeHtml(c.lsoaCode || "n/a") + "</span>");
+      if(Number.isFinite(c.distToExistingM)) metaBadges.push('<span class="badge">DistExist: ' + Math.round(c.distToExistingM) + "m</span>");
+
+      const m = document.createElement("div");
+      m.className="itemMeta";
+      m.innerHTML = metaBadges.join("");
+
+      div.appendChild(t);
+      div.appendChild(m);
+
+      div.addEventListener("click", function(){ focusCandidate(c); });
+      list.appendChild(div);
+    });
+  }
+
+  function downloadText(filename, text){
+    const blob = new Blob([text], {type:"text/plain;charset=utf-8"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href=url; a.download=filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 800);
+  }
+
+  function exportCSV(){
+    const rows = [["rank","name","lat","lng","score","d01","e01","g01","constr01","near01","cluster01",
+                   "lsoa","population","median_age","dist_to_existing_m",
+                   "parking_constraint","share_flats","share_dense","share_rented","share_no_car","wimd_rank","wimd_decile","wimd_norm"]];
+    selected.forEach(function(c,i){
+      rows.push([
+        i+1,
+        (c.name||"").replaceAll('"','""'),
+        c.lat, c.lng,
+        c.score.toFixed(6),
+        c.d01.toFixed(6), c.e01.toFixed(6), c.g01.toFixed(6),
+        c.costConstr01.toFixed(6), c.costNear01.toFixed(6), c.costCluster01.toFixed(6),
+        c.lsoaCode||"",
+        Number.isFinite(c.pop)? Math.round(c.pop): "",
+        Number.isFinite(c.medianAge)? c.medianAge: "",
+        Number.isFinite(c.distToExistingM)? Math.round(c.distToExistingM): "",
+        Number.isFinite(c.parking_constraint)? c.parking_constraint.toFixed(4): "",
+        Number.isFinite(c.share_flats)? c.share_flats.toFixed(4): "",
+        Number.isFinite(c.share_dense)? c.share_dense.toFixed(4): "",
+        Number.isFinite(c.share_rented)? c.share_rented.toFixed(4): "",
+        Number.isFinite(c.share_no_car)? c.share_no_car.toFixed(4): "",
+        Number.isFinite(c.wimd_rank)? Math.round(c.wimd_rank): "",
+        Number.isFinite(c.wimd_decile)? Math.round(c.wimd_decile): "",
+        Number.isFinite(c.wimd_norm)? c.wimd_norm.toFixed(6): ""
+      ]);
+    });
+    const csv = rows.map(function(r){ return r.map(function(x){ return '"' + x + '"'; }).join(","); }).join("\n");
+    downloadText("planner_shortlist.csv", csv);
+  }
+
+  function exportGeoJSON(){
+    const fc = {
+      type:"FeatureCollection",
+      features: selected.map(function(c,i){
+        return {
+          type:"Feature",
+          geometry:{type:"Point", coordinates:[c.lng,c.lat]},
+          properties:{
+            rank:i+1,
+            name:c.name||"",
+            score:+c.score.toFixed(6),
+            d01:+c.d01.toFixed(6),
+            e01:+c.e01.toFixed(6),
+            g01:+c.g01.toFixed(6),
+            constr01:+c.costConstr01.toFixed(6),
+            near01:+c.costNear01.toFixed(6),
+            cluster01:+c.costCluster01.toFixed(6),
+            lsoa:c.lsoaCode||"",
+            population: Number.isFinite(c.pop)? Math.round(c.pop): null,
+            median_age: Number.isFinite(c.medianAge)? +c.medianAge.toFixed(1): null,
+            dist_to_existing_m: Number.isFinite(c.distToExistingM)? Math.round(c.distToExistingM): null
+          }
+        };
+      })
+    };
+    downloadText("planner_shortlist.geojson", JSON.stringify(fc, null, 2));
+  }
+
+  // ===============================
+  // 10) SCENARIO RUN (TOP P)
+  // ===============================
+  function computeDistancesToExisting(){
+    // Cache min distance from each candidate to any existing supply point
+    if(!supplyPts.length){
+      for(const c of candPts){ c.distToExistingM = NaN; }
+      return;
+    }
+    for(const c of candPts){
+      let best = Infinity;
+      for(const s of supplyPts){
+        const d = distMeters(c.lat,c.lng,s.lat,s.lng);
+        if(d < best) best = d;
+      }
+      c.distToExistingM = Number.isFinite(best) ? best : NaN;
+    }
+  }
+
+  function computeCoverageDemand(selectedList){
+    const R = getServiceRadiusM();
+    if(!selectedList.length || !candPts.length) return { covW:0, avgDist:NaN };
+
+    let coveredW = 0, totalW = 0;
+    let distSum = 0, distN = 0;
+
+    for(const c of candPts){
+      const w = Math.max(0, num(c.demandRaw, 1));
+      totalW += w;
+
+      let best = Infinity;
+      for(const s of selectedList){
+        const d = distMeters(c.lat,c.lng,s.lat,s.lng);
+        if(d < best) best = d;
+      }
+      if(best <= R) coveredW += w;
+      if(Number.isFinite(best)){ distSum += best; distN++; }
+    }
+    return {
+      covW: totalW>0 ? coveredW/totalW : 0,
+      avgDist: distN>0 ? distSum/distN : NaN
+    };
+  }
+
+  function runScenario(){
+    const P = Math.max(1, Math.floor(num(document.getElementById("pSel").value, 10)));
+    const year = String(document.getElementById("yearSel").value || "2030");
+    const target = num(TARGET_BY_YEAR[year], 1500);
+
+    const supplyTotal = computeSupplyTotal();
+    const gap = Math.max(0, target - supplyTotal);
+
+    document.getElementById("k_supply").textContent = String(Math.round(supplyTotal));
+    document.getElementById("k_target").textContent = String(Math.round(target));
+    document.getElementById("k_gap").textContent = String(Math.round(gap));
+
+    if(!candPts.length){
+      setStatus("No candidates loaded. Check demand_points_cardiff_exact_pop_wgs84.geojson path.");
+      return;
+    }
+
+    // Normalize benefit components
+    const dN = normalize01(candPts.map(function(c){ return c.demandRaw; }));
+    const eN = normalize01(candPts.map(function(c){ return c.equityRaw; }));
+    const gN = normalize01(candPts.map(function(c){ return c.gapRaw; }));
+
+    // Costs
+    const constrN = normalize01(candPts.map(function(c){ return c.penaltyRaw; }));
+
+    // "Near-existing" cost is derived from distToExistingM: closer => higher cost
+    const R = getServiceRadiusM();
+    const nearArr = candPts.map(function(c){
+      const d = num(c.distToExistingM, NaN);
+      if(!Number.isFinite(d)) return 0;
+      // if d=0 => cost 1, if d>=R => cost 0
+      return clamp01(1 - (d / R));
+    });
+    const nearN = normalize01(nearArr);
+
+    const w = getWeights();
+    const mode = document.getElementById("scoreMode").value || "linear";
+
+    // Compute base score per candidate (without cluster cost)
+    for(let i=0;i<candPts.length;i++){
+      const c = candPts[i];
+
+      c.d01 = dN.norm(num(c.demandRaw, 0));
+      c.e01 = eN.norm(num(c.equityRaw, 0));
+      c.g01 = gN.norm(num(c.gapRaw, 0));
+
+      c.costConstr01 = constrN.norm(num(c.penaltyRaw, 0));
+      c.costNear01   = nearN.norm(nearArr[i]);
+      c.costCluster01 = 0; // will be filled during selection
+
+      c.benefit = w.wd*c.d01 + w.we*c.e01 + w.wg*c.g01;
+      c.cost = clamp01(w.wp*c.costConstr01 + w.wn*c.costNear01); // cluster added later
+
+      if(mode === "ga"){
+        c.scoreBase = c.benefit * (1 - c.cost);
+      } else {
+        c.scoreBase = c.benefit - c.cost;
+      }
+      c.score = c.scoreBase;
+    }
+
+    // Choose selection strategy
+    const selMode = document.getElementById("selMode").value || "rank";
+    const enforceSpread = document.getElementById("ckSpread").checked;
+    const minSpacingM = Math.max(0, num(document.getElementById("minSpacing").value, 700));
+
+    let picked = [];
+    if(selMode === "greedy"){
+      // Greedy pick with (optional) spacing as a hard filter; else as a soft penalty
+      const pool = candPts.slice().sort(function(a,b){ return b.scoreBase - a.scoreBase; });
+
+      while(picked.length < P && pool.length){
+        let bestIdx = -1;
+        let bestScore = -Infinity;
+
+        for(let i=0;i<pool.length;i++){
+          const c = pool[i];
+
+          // compute cluster cost wrt current picked
+          let bestD = Infinity;
+          for(const s of picked){
+            const d = distMeters(c.lat,c.lng,s.lat,s.lng);
+            if(d < bestD) bestD = d;
+          }
+          const clusterCost = (picked.length === 0) ? 0 : clamp01(1 - (bestD / Math.max(1, minSpacingM)));
+          if(enforceSpread && picked.length>0 && bestD < minSpacingM){
+            continue; // hard constraint
+          }
+
+          // final score with cluster penalty
+          const costFull = clamp01(c.cost + w.wc*clusterCost);
+          const score = (mode === "ga") ? (c.benefit * (1 - costFull)) : (c.benefit - costFull);
+
+          if(score > bestScore){
+            bestScore = score;
+            bestIdx = i;
+          }
+        }
+
+        if(bestIdx === -1){
+          // if hard constraint blocks all remaining, relax once
+          if(enforceSpread && picked.length>0){
+            document.getElementById("ckSpread").checked = false;
+            return runScenario();
+          }
+          break;
+        }
+
+        const chosen = pool.splice(bestIdx, 1)[0];
+        picked.push(chosen);
+      }
+
+      // After picked, compute final cluster cost for each picked
+      for(const c of picked){
+        let bestD = Infinity;
+        for(const s of picked){
+          if(s===c) continue;
+          const d = distMeters(c.lat,c.lng,s.lat,s.lng);
+          if(d < bestD) bestD = d;
+        }
+        c.minDistToSelectedM = Number.isFinite(bestD) ? bestD : NaN;
+        c.costCluster01 = (picked.length<=1 || !Number.isFinite(bestD)) ? 0 : clamp01(1 - (bestD / Math.max(1, minSpacingM)));
+        const costFull = clamp01(c.cost + w.wc*c.costCluster01);
+        c.cost = costFull;
+        c.score = (mode === "ga") ? (c.benefit * (1 - costFull)) : (c.benefit - costFull);
+      }
+      picked.sort(function(a,b){ return b.score - a.score; });
+
+    } else {
+      // Fast: rank by scoreBase, then optionally apply cluster as a post-adjustment
+      const pool = candPts.slice().sort(function(a,b){ return b.scoreBase - a.scoreBase; });
+      picked = pool.slice(0, P);
+
+      // compute cluster cost for reporting (not used in ordering in this mode)
+      for(const c of picked){
+        let bestD = Infinity;
+        for(const s of picked){
+          if(s===c) continue;
+          const d = distMeters(c.lat,c.lng,s.lat,s.lng);
+          if(d < bestD) bestD = d;
+        }
+        c.minDistToSelectedM = Number.isFinite(bestD) ? bestD : NaN;
+        c.costCluster01 = (picked.length<=1 || !Number.isFinite(bestD)) ? 0 : clamp01(1 - (bestD / Math.max(1, minSpacingM)));
+        const costFull = clamp01(c.cost + w.wc*c.costCluster01);
+        c.cost = costFull;
+        c.score = (mode === "ga") ? (c.benefit * (1 - costFull)) : (c.benefit - costFull);
+      }
+      picked.sort(function(a,b){ return b.score - a.score; });
+    }
+
+    selected = picked;
+
+    updateSelectedLayer();
+    renderList();
+
+    document.getElementById("k_selected").textContent = String(selected.length);
+    document.getElementById("btnExportCsv").disabled = selected.length===0;
+    document.getElementById("btnExportGeo").disabled = selected.length===0;
+
+    computeLSOAGapScores();
+    styleLSOA();
+
+    const cov = computeCoverageDemand(selected);
+    document.getElementById("k_cov").textContent = (cov.covW*100).toFixed(0) + "%";
+
+    updateWeightUI();
+    if(activeTab === "score") renderScoreTab();
+
+    setStatus(
+      "Scenario done.\n" +
+      "Year=" + year + ", target=" + Math.round(target) + ", supply=" + Math.round(supplyTotal) + ", gap=" + Math.round(gap) + ".\n" +
+      "Candidates=" + candPts.length + ", selected Top " + selected.length + ".\n" +
+      "Coverage radius D=" + (getServiceRadiusM()/1000).toFixed(1) + "km, demand-weighted coverage=" + (cov.covW*100).toFixed(0) + "%.\n" +
+      "Tip: switch to 'Gap map' to show underserved LSOAs, or 'Scoring' to explain the formula."
+    );
+  }
+
+  // ===============================
+  // 11) MAP INIT
+  // ===============================
+  async function initMap(){
+    map = new google.maps.Map(document.getElementById("map"), {
+      center:{lat:51.4816,lng:-3.1791},
+      zoom:12,
+      mapTypeControl:false, streetViewControl:false, fullscreenControl:true
+    });
+    info = new google.maps.InfoWindow();
+
+    supplyLayer   = new google.maps.Data({map});
+    lsoaLayer     = new google.maps.Data({map});
+    candLayer     = new google.maps.Data({map});
+    selectedLayer = new google.maps.Data({map});
+    solutionLayer = new google.maps.Data({map});
+
+    // Hover-aware styles
+    supplyLayer.setStyle(function(ft){
+      const hov = !!ft.getProperty("_hover");
+      return { icon: iconCircle("#2563eb", hov ? 10 : 8, hov ? 5 : 4), zIndex: 800 };
+    });
+    candLayer.setStyle(function(ft){
+      const hov = !!ft.getProperty("_hover");
+      return { icon: iconCircle("#f59e0b", hov ? 7 : 6, hov ? 3 : 2), zIndex: 700 };
+    });
+    selectedLayer.setStyle(function(ft){
+      const hov = !!ft.getProperty("_hover");
+      return { icon: iconStar("#ef4444", hov ? 1.35 : 1.15), zIndex: 9999 };
+    });
+    solutionLayer.setStyle(function(){ return { icon: iconTriangle("#7c3aed"), zIndex: 850 }; });
+
+    // Hover events
+    function addHover(layer){
+      layer.addListener("mouseover", function(e){ e.feature.setProperty("_hover", true); });
+      layer.addListener("mouseout", function(e){ e.feature.setProperty("_hover", false); });
+    }
+    addHover(supplyLayer);
+    addHover(candLayer);
+    addHover(selectedLayer);
+
+    styleLSOA();
+    setScorePanelVisible();
+    updateWeightUI();
+
+    // p10 overlay controls
+    if(ENABLE_P10_OVERLAY){
+      document.getElementById("ckSolutionWrap").style.display = "inline-flex";
+      document.getElementById("ckSolution").checked = false;
+      solutionLayer.setMap(null);
+      document.getElementById("ckSolution").addEventListener("change", function(e){
+        solutionLayer.setMap(e.target.checked ? map : null);
+      });
+    } else {
+      document.getElementById("ckSolutionWrap").style.display = "none";
+      solutionLayer.setMap(null);
+    }
+
+    // UI toggles
+    document.getElementById("ckSupply").addEventListener("change", function(e){ supplyLayer.setMap(e.target.checked? map:null); });
+    document.getElementById("ckLSOA").addEventListener("change", function(e){ lsoaLayer.setMap(e.target.checked? map:null); });
+    document.getElementById("ckCandidates").addEventListener("change", function(e){ candLayer.setMap(e.target.checked? map:null); });
+    document.getElementById("ckSelected").addEventListener("change", function(e){ selectedLayer.setMap(e.target.checked? map:null); });
+
+    document.getElementById("tabKpi").addEventListener("click", function(){ setTab("kpi"); });
+    document.getElementById("tabGap").addEventListener("click", function(){ setTab("gap"); });
+    document.getElementById("tabScore").addEventListener("click", function(){ setTab("score"); });
+
+    document.getElementById("btnRun").addEventListener("click", runScenario);
+    document.getElementById("btnExportCsv").addEventListener("click", exportCSV);
+    document.getElementById("btnExportGeo").addEventListener("click", exportGeoJSON);
+    document.getElementById("btnPrint").addEventListener("click", function(){ window.print(); });
+
+    function hookRerun(id, evtName){
+      const el = document.getElementById(id);
+      if(!el) return;
+      el.addEventListener(evtName || "input", function(){
+        updateWeightUI();
+        if(Array.isArray(candPts) && candPts.length > 0) runScenario();
+      });
+    }
+    // Sliders and inputs that should re-run scenario
+    ["wDemand","wEquity","wGap","wPenalty","wNear","wCluster"].forEach(function(id){ hookRerun(id, "input"); });
+    ["scoreMode","svcKm","minSpacing","selMode","ckSpread"].forEach(function(id){ hookRerun(id, "change"); });
+
+    try{
+      setStatus("Loading GeoJSON…");
+
+      const [supply, lsoa, candidates] = await Promise.all([
+        loadGeoJSON(DATA_URLS.supply),
+        loadGeoJSON(DATA_URLS.lsoa),
+        loadGeoJSON(DATA_URLS.candidates)
+      ]);
+
+      const solution = ENABLE_P10_OVERLAY ? await loadGeoJSONOptional(DATA_URLS.solution) : null;
+
+      supplyLayer.addGeoJson(supply);
+      lsoaLayer.addGeoJson(lsoa);
+      candLayer.addGeoJson(candidates);
+      if(solution) solutionLayer.addGeoJson(solution);
+
+      // build LSOA index from enriched geojson polygons
+      lsoaIndex = (lsoa.features||[]).map(function(f){
+        const props = f.properties || {};
+        const code = getProp(props, FIELD.code, "LSOA");
+
+        // Demand raw: population preferred
+        const pop  = num(getProp(props, FIELD.pop, null), NaN);
+        const demandRaw = Number.isFinite(pop) ? pop : num(getProp(props, FIELD.demand, 1), 1);
+
+        // Equity raw: WIMD preferred
+        const medAge = num(getProp(props, FIELD.median_age, null), NaN);
+        const equityRaw = computeEquityFromProps(props, medAge);
+
+        // Penalty raw: parking_constraint or derived shares
+        const penaltyRaw = computePenaltyFromProps(props);
+
+        // Proxies for export/info
+        const wimd_norm   = num(getProp(props, FIELD.wimd_norm, NaN), NaN);
+        const wimd_rank   = num(getProp(props, FIELD.wimd_rank, NaN), NaN);
+        const wimd_decile = num(getProp(props, FIELD.wimd_decile, NaN), NaN);
+
+        const parking_constraint = pctTo01(getProp(props, FIELD.parking_constraint, NaN));
+        const share_flats  = pctTo01(getProp(props, FIELD.share_flats, NaN));
+        const share_dense  = pctTo01(getProp(props, FIELD.share_dense, NaN));
+        const share_rented = pctTo01(getProp(props, FIELD.share_rented, NaN));
+        const share_no_car = pctTo01(getProp(props, FIELD.share_no_car, NaN));
+
+        const polygons = makePolygonsFromGeometry(f.geometry);
+
+        return {
+          code: code,
+          pop: pop,
+          medianAge: medAge,
+          demandRaw: demandRaw,
+          equityRaw: equityRaw,
+          penaltyRaw: penaltyRaw,
+          wimd_norm: wimd_norm, wimd_rank: wimd_rank, wimd_decile: wimd_decile,
+          parking_constraint: parking_constraint,
+          share_flats: share_flats, share_dense: share_dense, share_rented: share_rented, share_no_car: share_no_car,
+          polygons: polygons,
+          feature: null,
+          supplyRaw: 0,
+          gap01: 0
+        };
+      });
+
+      // Map Data layer features back to index so we can set _gapScore
+      const lsoaByCode = new Map(lsoaIndex.map(function(r){ return [r.code, r]; }));
+      lsoaLayer.forEach(function(ft){
+        const propsLike = {
+          LSOA21CD: ft.getProperty("LSOA21CD"),
+          lsoa21cd: ft.getProperty("lsoa21cd"),
+          LSOA11CD: ft.getProperty("LSOA11CD"),
+          lsoa11cd: ft.getProperty("lsoa11cd"),
+          code: ft.getProperty("code"),
+          id: ft.getProperty("id"),
+        };
+        const code = getProp(propsLike, FIELD.code, null);
+        if(code && lsoaByCode.has(code)){
+          const rec = lsoaByCode.get(code);
+          rec.feature = ft;
+          ft.setProperty("code", rec.code);
+        }
+      });
+
+      // supply cache
+      supplyPts = [];
+      for(const f of (supply.features||[])){
+        if(!f.geometry || f.geometry.type!=="Point") continue;
+        const coords = f.geometry.coordinates || [];
+        const lng = coords[0], lat = coords[1];
+        if(typeof lat!=="number" || typeof lng!=="number") continue;
+        if(looksLike27700(lng, lat)) continue;
+        const props = f.properties || {};
+        const sockets = num(getProp(props, FIELD.sockets, 0), 0);
+        supplyPts.push({lat:lat, lng:lng, sockets: (sockets || 1)});
+      }
+
+      // compute initial gap scores (needs supplyPts + lsoaIndex)
+      computeLSOAGapScores();
+
+      // candidate cache + join to enriched LSOA (inherit demand/equity/penalty/gap + proxies)
+      candPts = [];
+      for(const f of (candidates.features||[])){
+        if(!f.geometry || f.geometry.type!=="Point") continue;
+        const coords = f.geometry.coordinates || [];
+        const lng = coords[0], lat = coords[1];
+        if(typeof lat!=="number" || typeof lng!=="number") continue;
+        if(looksLike27700(lng, lat)) continue;
+
+        const props = f.properties || {};
+        const name = getProp(props, ["name","id","site","label","LSOA21NM","LSOA11NM"], "Demand centroid");
+
+        const ll = new google.maps.LatLng(lat, lng);
+        const rec = joinPointToLSOA(ll);
+
+        const demandRaw = rec ? num(rec.demandRaw, 1) : 1;
+        const equityRaw = rec ? num(rec.equityRaw, 0) : 0;
+        const penaltyRaw = rec ? num(rec.penaltyRaw, 0) : 0;
+        const gapRaw = rec ? num(rec.gap01, 0) : 0;
+
+        const pop = rec ? num(rec.pop, NaN) : NaN;
+        const medianAge = rec ? num(rec.medianAge, NaN) : NaN;
+
+        candPts.push({
+          lat:lat, lng:lng, name:name,
+          demandRaw:demandRaw, equityRaw:equityRaw, penaltyRaw:penaltyRaw, gapRaw:gapRaw,
+          lsoaCode: rec ? rec.code : "",
+          pop: pop, medianAge: medianAge,
+
+          // proxies for info window / export
+          wimd_norm: rec ? rec.wimd_norm : NaN,
+          wimd_rank: rec ? rec.wimd_rank : NaN,
+          wimd_decile: rec ? rec.wimd_decile : NaN,
+          parking_constraint: rec ? rec.parking_constraint : NaN,
+          share_flats: rec ? rec.share_flats : NaN,
+          share_dense: rec ? rec.share_dense : NaN,
+          share_rented: rec ? rec.share_rented : NaN,
+          share_no_car: rec ? rec.share_no_car : NaN,
+
+          // computed later
+          distToExistingM: NaN,
+          scoreBase: 0,
+          score: 0
+        });
+      }
+
+      // dist-to-existing for near penalty
+      computeDistancesToExisting();
+
+      // initial KPI
+      const year = String(document.getElementById("yearSel").value || "2030");
+      const supplyTotal = computeSupplyTotal();
+      document.getElementById("k_supply").textContent = String(Math.round(supplyTotal));
+      document.getElementById("k_target").textContent = String(Math.round(num(TARGET_BY_YEAR[year], 1500)));
+      document.getElementById("k_gap").textContent = "–";
+
+      map.fitBounds(CARDIFF_BOUNDS);
+
+      setStatus(
+        "Loaded.\n" +
+        "Supply points: " + supplyPts.length + "\n" +
+        "LSOA polygons (enriched): " + (lsoa.features||[]).length + "\n" +
+        "Candidates: " + candPts.length + "\n" +
+        "p10 overlay: " + ((ENABLE_P10_OVERLAY && solution) ? "loaded" : "disabled") + "\n\n" +
+        "Next: Run scenario (Top P) → then open Scoring tab."
+      );
+
+      // initial render for formula
+      updateWeightUI();
+
+    } catch(err){
+      console.error(err);
+      setStatus("FAILED.\n" + String(err));
+      alert(String(err));
+    }
+  }
+
+  window.initMap = initMap;
+
+  (function loadGoogleMaps(){
+    const s = document.createElement("script");
+    s.src = "https://maps.googleapis.com/maps/api/js?key=" + encodeURIComponent(GMAPS_KEY) +
+            "&callback=initMap&v=weekly&libraries=geometry&loading=async";
+    s.async = true; s.defer = true;
+    document.head.appendChild(s);
+  })();
+</script>
+</body>
+</html>
