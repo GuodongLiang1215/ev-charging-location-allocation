@@ -114,7 +114,6 @@
       <label class="small"><input id="ckGAPlan" type="checkbox" checked> Show GA plan</label>
     </div>
 
-    <!-- NEW: Map click priority (fix clicking GA without hiding LSOA) -->
     <div class="row">
       <span class="badge" style="font-weight:900;">Map click priority</span>
       <span class="pill" id="pickLSOA">LSOA on top</span>
@@ -157,9 +156,10 @@
         <input id="svcKm" class="input" style="width:90px" type="number" min="0.2" step="0.1" value="1.5"/>
       </div>
 
+      <!-- CHANGED DEFAULT: 8 -> 6 (tighter, less saturation) -->
       <div class="row" id="rowTimeMin">
         <label class="small" style="min-width:160px;">Time threshold T (min)</label>
-        <input id="svcMin" class="input" style="width:90px" type="number" min="2" step="1" value="8"/>
+        <input id="svcMin" class="input" style="width:90px" type="number" min="2" step="1" value="6"/>
       </div>
 
       <div class="row">
@@ -225,9 +225,10 @@
         <div class="badge" style="font-weight:900;">Worst-served LSOA (lexicographic 2nd objective)</div>
       </div>
 
+      <!-- CHANGED DEFAULT: 10 -> 20 (stronger fairness pressure) -->
       <div class="row">
         <label class="small" style="min-width:160px;">Worst-served group (%)</label>
-        <input id="worstPct" class="input" style="width:90px" type="number" min="1" max="50" step="1" value="10"/>
+        <input id="worstPct" class="input" style="width:90px" type="number" min="1" max="50" step="1" value="20"/>
       </div>
 
       <div class="row" style="margin-top:10px;">
@@ -246,37 +247,42 @@
         <div class="badge" style="font-weight:900;">GA settings</div>
       </div>
 
+      <!-- CHANGED DEFAULTS: pop 60->120, gen 120->240 -->
       <div class="row">
         <label class="small" style="min-width:160px;">Population</label>
-        <input id="gaPop" class="input" style="width:90px" type="number" min="10" step="10" value="60"/>
+        <input id="gaPop" class="input" style="width:90px" type="number" min="10" step="10" value="120"/>
         <label class="small" style="min-width:120px;">Generations</label>
-        <input id="gaGen" class="input" style="width:90px" type="number" min="10" step="10" value="120"/>
+        <input id="gaGen" class="input" style="width:90px" type="number" min="10" step="10" value="240"/>
       </div>
 
+      <!-- CHANGED DEFAULTS: mut 0.25->0.45, elite 0.10->0.08 -->
       <div class="row">
         <label class="small" style="min-width:160px;">Mutation rate</label>
-        <input id="gaMut" class="input" style="width:90px" type="number" min="0" max="1" step="0.01" value="0.25"/>
+        <input id="gaMut" class="input" style="width:90px" type="number" min="0" max="1" step="0.01" value="0.45"/>
         <label class="small" style="min-width:120px;">Elite rate</label>
-        <input id="gaElite" class="input" style="width:90px" type="number" min="0" max="0.5" step="0.01" value="0.10"/>
+        <input id="gaElite" class="input" style="width:90px" type="number" min="0" max="0.5" step="0.01" value="0.08"/>
       </div>
 
+      <!-- CHANGED DEFAULT: seed 0.30->0.15 -->
       <div class="row">
         <label class="small" style="min-width:160px;">Seed with LSOA (%)</label>
-        <input id="gaSeedPct" class="input" style="width:90px" type="number" min="0" max="0.8" step="0.05" value="0.30"/>
+        <input id="gaSeedPct" class="input" style="width:90px" type="number" min="0" max="0.8" step="0.05" value="0.15"/>
       </div>
 
       <div class="row" style="margin-top:10px;">
         <div class="badge" style="font-weight:900;">Performance (P=100 safe)</div>
       </div>
 
+      <!-- CHANGED DEFAULT: 700->900 -->
       <div class="row">
         <label class="small" style="min-width:160px;">Coverage sample (candidates)</label>
-        <input id="covSampleN" class="input" style="width:90px" type="number" min="200" step="100" value="700"/>
+        <input id="covSampleN" class="input" style="width:90px" type="number" min="200" step="100" value="900"/>
       </div>
 
+      <!-- CHANGED DEFAULT: 25->80 -->
       <div class="row">
         <label class="small" style="min-width:160px;">GA eval sample (population)</label>
-        <input id="gaEvalSample" class="input" style="width:90px" type="number" min="10" step="10" value="25"/>
+        <input id="gaEvalSample" class="input" style="width:90px" type="number" min="10" step="10" value="80"/>
       </div>
 
       <div class="row">
@@ -297,7 +303,6 @@
     <div class="status" id="status"></div>
   </div>
 
-  <!-- KPI Tab -->
   <div class="section" id="kpiPanel">
     <div style="font-weight:900; margin-bottom:6px;">KPI comparison</div>
     <div class="kpis">
@@ -326,10 +331,9 @@
       <div class="card"><div class="h">GA: equity disparity (Q5 − Q1)</div><div class="v" id="k_eqgap_ga">–</div></div>
     </div>
 
-    <!-- NEW: Worst-served LSOA list -->
     <div class="section">
       <div class="row" style="justify-content:space-between;">
-        <div style="font-weight:900;">Worst-served LSOAs (bottom <span id="wsPctBadge">10</span>%)</div>
+        <div style="font-weight:900;">Worst-served LSOAs (bottom <span id="wsPctBadge">20</span>%)</div>
         <span class="badge" id="wsCountBadge">0</span>
       </div>
       <div class="muted">
@@ -339,7 +343,6 @@
     </div>
   </div>
 
-  <!-- Compare Tab -->
   <div class="section" id="comparePanel" style="display:none;">
     <div class="row" style="justify-content:space-between;">
       <div style="font-weight:900;">Shortlists (click either list)</div>
@@ -351,7 +354,6 @@
       <span class="badge" style="border-color:#7c3aed;">GA plan</span>
     </div>
 
-    <!-- NEW: split lists -->
     <div class="section" style="border-top:none; padding-top:0;">
       <div style="font-weight:900; margin-bottom:6px;">LSOA shortlist</div>
       <div class="list" id="lsoaList"></div>
@@ -397,9 +399,6 @@
   const R2 = R_EARTH * R_EARTH;
   const DEG2RAD = Math.PI / 180;
 
-  // ===============================
-  // 1) FIELD MAPS
-  // ===============================
   const FIELD = {
     code:   ["LSOA21CD","lsoa21cd","LSOA11CD","lsoa11cd","code","id"],
     pop:    ["population","pop","pop_total","Pop","total_pop","Total"],
@@ -418,9 +417,6 @@
     name:   ["name","operator","location","Site","address","Address"]
   };
 
-  // ===============================
-  // 2) STATE
-  // ===============================
   let map, info;
   let supplyLayer, lsoaLayer, candLayer, lsoaPlanLayer, gaPlanLayer;
 
@@ -433,20 +429,15 @@
   let selectedGA = [];
   let activeTab = "kpi";
 
-  // NEW: click priority
-  let clickPriority = "ga"; // "ga" or "lsoa"
+  let clickPriority = "ga";
 
-  // Worst-served cache
   let worstCache = {
     set: new Set(),
     codes: [],
-    currentAgg: new Map(), // code -> {totW, covCurW, covCur01}
-    pct: 10
+    currentAgg: new Map(),
+    pct: 20
   };
 
-  // ===============================
-  // 3) UTILS
-  // ===============================
   function setStatus(msg){ document.getElementById("status").textContent = msg || ""; }
   function escapeHtml(s){
     return String(s||"").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
@@ -485,23 +476,16 @@
     const y = dLat;
     return R2 * (x*x + y*y);
   }
-  function distFast(a, b){
-    return Math.sqrt(distSqFast(a,b));
-  }
+  function distFast(a, b){ return Math.sqrt(distSqFast(a,b)); }
 
-  // ===============================
-  // 3.1) Coverage threshold helpers
-  // ===============================
   function getDetourK(){ return Math.max(1.0, Math.min(2.5, num(document.getElementById("detourK").value, 1.25))); }
   function getSpeedKmh(){ return Math.max(10, Math.min(80, num(document.getElementById("speedKmh").value, 28))); }
-  function getTimeThresholdMin(){ return Math.max(2, num(document.getElementById("svcMin").value, 8)); }
+  function getTimeThresholdMin(){ return Math.max(2, num(document.getElementById("svcMin").value, 6)); }
   function getCoverageMode(){ return String(document.getElementById("covMode").value || "time"); }
-
   function getServiceRadiusM(){
     const km = Math.max(0.2, num(document.getElementById("svcKm").value, 1.5));
     return km * 1000;
   }
-
   function getCoverageThresholdDistM(){
     const mode = getCoverageMode();
     if(mode === "distance") return getServiceRadiusM();
@@ -511,21 +495,14 @@
     const distKm = (T/60) * speed / k;
     return Math.max(50, distKm * 1000);
   }
-
   function updateCoverageUI(){
     const mode = getCoverageMode();
     const rowSvc = document.getElementById("rowSvcKm");
     const rowT   = document.getElementById("rowTimeMin");
-    if(mode === "time"){
-      rowT.style.display = "flex";
-      rowSvc.style.display = "none";
-    } else {
-      rowT.style.display = "none";
-      rowSvc.style.display = "flex";
-    }
+    if(mode === "time"){ rowT.style.display = "flex"; rowSvc.style.display = "none"; }
+    else { rowT.style.display = "none"; rowSvc.style.display = "flex"; }
   }
 
-  // Symbols
   function iconCircle(fill, scale, strokeW){
     return { path: google.maps.SymbolPath.CIRCLE, fillColor:fill, fillOpacity:1,
       strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:strokeW, scale: scale };
@@ -539,9 +516,6 @@
       fillColor:fill, fillOpacity:0.95, strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:1, scale:scale };
   }
 
-  // ===============================
-  // 4) EQUITY & PENALTY
-  // ===============================
   function computeEquityFromProps(props, fallbackMedianAge){
     const equityProxy = getProp(props, FIELD.equity_proxy, null);
     if(equityProxy !== null) return num(equityProxy, 0);
@@ -583,15 +557,11 @@
     return clamp01(val);
   }
 
-  // ===============================
-  // 5) WEIGHTS & FORMULA TEXT  (NO equity in score)
-  // ===============================
   function getWeights(){
     let wd = num(document.getElementById("wDemand").value, 0.65);
     let wg = num(document.getElementById("wGap").value,    0.35);
     const sumB = wd + wg;
-    if(sumB > 0){ wd/=sumB; wg/=sumB; }
-    else { wd=0.65; wg=0.35; }
+    if(sumB > 0){ wd/=sumB; wg/=sumB; } else { wd=0.65; wg=0.35; }
 
     let wp = num(document.getElementById("wPenalty").value, 0.25);
     let wn = num(document.getElementById("wNear").value,    0.20);
@@ -615,9 +585,6 @@
     document.getElementById("scoreFormulaInline").textContent = txt;
   }
 
-  // ===============================
-  // 6) TABS & CHOROPLETH
-  // ===============================
   function setTab(tab){
     activeTab = tab;
     document.getElementById("tabKpi").classList.toggle("active", tab==="kpi");
@@ -632,7 +599,6 @@
 
   function styleLSOA(){
     if(!lsoaLayer) return;
-
     if(activeTab === "gap"){
       lsoaLayer.setStyle(ft => {
         const s = num(ft.getProperty("_gapScore"), 0);
@@ -646,9 +612,6 @@
     }
   }
 
-  // ===============================
-  // 7) POLYGON HELPERS (LSOA join + zoom)
-  // ===============================
   function makePolygonsFromGeometry(geom){
     const polys = [];
     if(!geom) return polys;
@@ -701,9 +664,6 @@
     return { norm: x => (x-mn)/(mx-mn) };
   }
 
-  // ===============================
-  // 8) GAP SCORE (LSOA underserved)
-  // ===============================
   function computeSupplyTotal(){
     let sum = 0;
     for(const p of supplyPts) sum += num(p.sockets, 0);
@@ -747,11 +707,8 @@
     }
   }
 
-  // ===============================
-  // 9) Sampling
-  // ===============================
   function getCoverageSampleN(){
-    return Math.max(200, Math.floor(num(document.getElementById("covSampleN").value, 700)));
+    return Math.max(200, Math.floor(num(document.getElementById("covSampleN").value, 900)));
   }
   function sampleCandidatesForCoverage(){
     const N = candPts.length;
@@ -767,9 +724,6 @@
     return out;
   }
 
-  // ===============================
-  // 10) DISTANCE TO EXISTING
-  // ===============================
   function computeDistancesToExisting(){
     if(!supplyPts.length){
       for(const c of candPts){ c.distToExistingM = NaN; c.distToExistingSq = Infinity; }
@@ -786,12 +740,9 @@
     }
   }
 
-  // ===============================
-  // 11) SHARED SCORING (NO equity in score)
-  // ===============================
   function scoreCandidatesShared(){
     const dN = normalize01(candPts.map(c => c.demandRaw));
-    const eN = normalize01(candPts.map(c => c.equityRaw)); // evaluation only
+    const eN = normalize01(candPts.map(c => c.equityRaw));
     const gN = normalize01(candPts.map(c => c.gapRaw));
     const constrN = normalize01(candPts.map(c => c.penaltyRaw));
 
@@ -804,7 +755,6 @@
     const nearN = normalize01(nearArr);
 
     const w = getWeights();
-
     for(let i=0;i<candPts.length;i++){
       const c = candPts[i];
       c.d01 = dN.norm(num(c.demandRaw, 0));
@@ -858,9 +808,6 @@
     }
   }
 
-  // ===============================
-  // 12) BASELINE SELECTION
-  // ===============================
   function repairSolution(sol, P){
     const out = [];
     const used = new Set();
@@ -886,14 +833,12 @@
 
   function runBaselineLSOA(P, modeOverride=null){
     const selMode = modeOverride || (document.getElementById("selMode").value || "greedy");
-
     if(selMode === "greedy"){
       const pool = candPts.slice().sort((a,b)=> b.scoreBase - a.scoreBase);
       const picked = [];
       while(picked.length < P && pool.length){
         let bestIdx = -1;
         let bestScore = -Infinity;
-
         for(let i=0;i<pool.length;i++){
           const c = pool[i];
           const trial = picked.concat([c]);
@@ -909,16 +854,12 @@
       repaired.sort((a,b)=> b.score - a.score);
       return repaired;
     }
-
     const picked = candPts.slice().sort((a,b)=> b.scoreBase - a.scoreBase).slice(0, P);
     applyClusterCosts(picked);
     picked.sort((a,b)=> b.score - a.score);
     return picked;
   }
 
-  // ===============================
-  // 13) KPIs: worst-served cache + plan metrics
-  // ===============================
   function redundancyAvgNearestSelected(selectedList){
     if(selectedList.length < 2) return NaN;
     const dists = [];
@@ -945,8 +886,8 @@
     const thrM = getCoverageThresholdDistM();
     const thrSq = thrM * thrM;
 
-    const pct = Math.max(1, Math.min(50, Math.floor(num(document.getElementById("worstPct").value, 10))));
-    const agg = new Map(); // code -> {totW, covCurW}
+    const pct = Math.max(1, Math.min(50, Math.floor(num(document.getElementById("worstPct").value, 20))));
+    const agg = new Map();
 
     for(const c of demandPoints){
       const code = c.lsoaCode || "";
@@ -985,20 +926,17 @@
     const thrM = getCoverageThresholdDistM();
     const thrSq = thrM * thrM;
 
-    const afterCovW = new Map(); // code -> covAfterW
-
+    const afterCovW = new Map();
     for(const c of demandPoints){
       const code = c.lsoaCode || "";
       if(!code || !cache.set.has(code)) continue;
 
       const existingSq = Number.isFinite(c.distToExistingSq) ? c.distToExistingSq : Infinity;
-
       let bestNewSq = Infinity;
       for(const s of selectedList){
         const dSq = distSqFast(c, s);
         if(dSq < bestNewSq) bestNewSq = dSq;
       }
-
       const bestSq = Math.min(existingSq, bestNewSq);
       if(bestSq <= thrSq){
         const w = Math.max(0, num(c.demandRaw, 1));
@@ -1021,8 +959,6 @@
     const thrSq = thrM * thrM;
 
     let totalW = 0, coveredW = 0;
-
-    // track after coverage for worst-served
     const afterCovW = new Map();
 
     for(const c of demandPoints){
@@ -1030,13 +966,11 @@
       totalW += w;
 
       const existingSq = Number.isFinite(c.distToExistingSq) ? c.distToExistingSq : Infinity;
-
       let bestNewSq = Infinity;
       for(const s of selectedList){
         const dSq = distSqFast(c, s);
         if(dSq < bestNewSq) bestNewSq = dSq;
       }
-
       const bestSq = Math.min(existingSq, bestNewSq);
 
       if(bestSq <= thrSq) coveredW += w;
@@ -1053,30 +987,24 @@
     let minImprove = Infinity;
     let avgImproveSum = 0;
     let count = 0;
-
     for(const code of cache.codes){
       const cur = cache.currentAgg.get(code);
       if(!cur || cur.totW <= 0) continue;
 
       const covAfterW = afterCovW.get(code) || 0;
       const covAfterLSOA = covAfterW / cur.totW;
-
       const improve = covAfterLSOA - cur.covCur01;
 
       minImprove = Math.min(minImprove, improve);
       avgImproveSum += improve;
       count++;
     }
-
     if(!Number.isFinite(minImprove)) minImprove = 0;
     const avgImprove = count > 0 ? (avgImproveSum / count) : 0;
 
     return { covAfter01, minImprove, avgImprove };
   }
 
-  // ===============================
-  // 14) Equity evaluation (post-hoc)
-  // ===============================
   function getEquityDir(){
     const el = document.getElementById("equityDir");
     return el ? String(el.value || "highNeedHigh") : "highNeedHigh";
@@ -1088,12 +1016,10 @@
 
   function computeEquityWeightedCoverage(selectedList, demandPoints){
     if(!selectedList.length || !demandPoints.length) return 0;
-
     const thrM = getCoverageThresholdDistM();
     const thrSq = thrM * thrM;
 
     let coveredW = 0, totalW = 0;
-
     for(const c of demandPoints){
       const demandW = Math.max(0, num(c.demandRaw, 1));
       const need01 = equityNeed01FromE01(c.e01);
@@ -1108,16 +1034,13 @@
         if(dSq < bestNewSq) bestNewSq = dSq;
       }
       const bestSq = Math.min(existingSq, bestNewSq);
-
       if(bestSq <= thrSq) coveredW += w;
     }
-
     return totalW > 0 ? coveredW/totalW : 0;
   }
 
   function computeEquityGroupsFromLSOA(){
     if(!lsoaIndex.length) return;
-
     const eN = normalize01(lsoaIndex.map(r => r.equityRaw));
     const needVals = [];
     for(const r of lsoaIndex){
@@ -1153,7 +1076,6 @@
 
   function computeEquityDisparityQ5Q1(selectedList, demandPoints){
     if(!selectedList.length || !demandPoints.length) return { diff: NaN };
-
     const thrM = getCoverageThresholdDistM();
     const thrSq = thrM * thrM;
 
@@ -1172,7 +1094,6 @@
         if(dSq < bestNewSq) bestNewSq = dSq;
       }
       const bestSq = Math.min(existingSq, bestNewSq);
-
       if(bestSq <= thrSq) covered[g] += w;
     }
 
@@ -1182,28 +1103,20 @@
     return { q1, q5, diff };
   }
 
-  // ===============================
-  // 15) GA – lexicographic: Coverage → Worst-served min improvement → Score
-  // ===============================
+  // GA helpers
   function randInt(n){ return Math.floor(Math.random()*n); }
-
-  function makeRandomSolution(P){
-    return repairSolution([], P);
-  }
-
+  function makeRandomSolution(P){ return repairSolution([], P); }
   function crossover(a, b, P){
     const pool = [];
     const seen = new Set();
     for(const x of a){ if(!seen.has(x)){ pool.push(x); seen.add(x);} }
     for(const x of b){ if(!seen.has(x)){ pool.push(x); seen.add(x);} }
-
     for(let i=pool.length-1;i>0;i--){
       const j = randInt(i+1);
       [pool[i], pool[j]] = [pool[j], pool[i]];
     }
     return repairSolution(pool, P);
   }
-
   function mutate(sol, P, mutRate){
     const out = (sol||[]).slice();
     for(let i=0;i<out.length;i++){
@@ -1220,35 +1133,30 @@
     }
     return repairSolution(out, P);
   }
-
   function buildSeededPopulation(P, popSize, seedSol){
-    const seedPct = Math.max(0, Math.min(0.8, num(document.getElementById("gaSeedPct").value, 0.30)));
+    const seedPct = Math.max(0, Math.min(0.8, num(document.getElementById("gaSeedPct").value, 0.15)));
     const seedCount = Math.max(0, Math.floor(popSize * seedPct));
     const pop = [];
 
     if(seedCount > 0 && seedSol && seedSol.length){
       const base = repairSolution(seedSol, P);
       pop.push(base);
-
-      const baseMut = Math.min(0.6, Math.max(0.20, num(document.getElementById("gaMut").value, 0.25) + 0.15));
+      const baseMut = Math.min(0.8, Math.max(0.30, num(document.getElementById("gaMut").value, 0.45) + 0.10));
       for(let i=1; i<seedCount; i++){
         pop.push(mutate(base, P, baseMut));
       }
     }
-
     while(pop.length < popSize){
       pop.push(makeRandomSolution(P));
     }
     return pop;
   }
-
   function evalLex(sol, demandPoints, cache){
     applyClusterCosts(sol);
     const m = computePlanMetrics(sol, demandPoints, cache);
     const meanScore = sol.reduce((a,b)=>a+num(b.score,0),0)/Math.max(1,sol.length);
-    return { sol, keys:[m.covAfter01, m.minImprove, meanScore], covAfter01:m.covAfter01, minImprove:m.minImprove, meanScore };
+    return { sol, keys:[m.covAfter01, m.minImprove, meanScore] };
   }
-
   function lexIsBetter(a, b){
     const eps = [1e-4, 1e-4, 1e-4];
     for(let i=0;i<a.keys.length;i++){
@@ -1263,13 +1171,12 @@
     if(lexIsBetter(b,a)) return 1;
     return 0;
   }
-
   function runGA(P, seedSol, demandPoints, cache){
-    const popSize = Math.max(10, Math.floor(num(document.getElementById("gaPop").value, 60)));
-    const gens = Math.max(10, Math.floor(num(document.getElementById("gaGen").value, 120)));
-    const mutRate = clamp01(num(document.getElementById("gaMut").value, 0.25));
-    const eliteRate = Math.max(0, Math.min(0.5, num(document.getElementById("gaElite").value, 0.10)));
-    const evalSample = Math.max(10, Math.min(popSize, Math.floor(num(document.getElementById("gaEvalSample").value, 25))));
+    const popSize = Math.max(10, Math.floor(num(document.getElementById("gaPop").value, 120)));
+    const gens = Math.max(10, Math.floor(num(document.getElementById("gaGen").value, 240)));
+    const mutRate = clamp01(num(document.getElementById("gaMut").value, 0.45));
+    const eliteRate = Math.max(0, Math.min(0.5, num(document.getElementById("gaElite").value, 0.08)));
+    const evalSample = Math.max(10, Math.min(popSize, Math.floor(num(document.getElementById("gaEvalSample").value, 80))));
 
     let pop = buildSeededPopulation(P, popSize, seedSol);
     let bestEval = evalLex(pop[0], demandPoints, cache);
@@ -1277,7 +1184,7 @@
     function pickEvalSubset(arr){
       if(arr.length <= evalSample) return arr;
       const out = [];
-      const fixed = Math.min(5, arr.length);
+      const fixed = Math.min(10, arr.length);
       for(let i=0;i<fixed;i++) out.push(arr[i]);
       while(out.length < evalSample){
         out.push(arr[randInt(arr.length)]);
@@ -1323,11 +1230,7 @@
     return bestSol;
   }
 
-  // ===============================
-  // 16) MAP LAYERS UPDATE
-  // ===============================
   function clearLayer(layer){ layer.forEach(ft => layer.remove(ft)); }
-
   function setPlanLayer(layer, selectedList, planName){
     clearLayer(layer);
     const fc = {
@@ -1364,7 +1267,6 @@
     info.open({map});
   }
 
-  // NEW: split shortlist lists
   function renderSplitShortlists(){
     const badge = document.getElementById("countBadge");
     badge.textContent = `${(selectedLSOA||[]).length} / ${(selectedGA||[]).length}`;
@@ -1418,7 +1320,6 @@
     }
   }
 
-  // NEW: worst list renderer
   function renderWorstList(cache, afterLSOA, afterGA){
     const el = document.getElementById("worstList");
     const wsPctBadge = document.getElementById("wsPctBadge");
@@ -1433,7 +1334,6 @@
       return;
     }
 
-    // sort by current coverage asc
     const rows = cache.codes.map(code => {
       const cur = cache.currentAgg.get(code);
       const cur01 = cur ? cur.covCur01 : 0;
@@ -1472,9 +1372,6 @@
     });
   }
 
-  // ===============================
-  // 17) EXPORTS
-  // ===============================
   function downloadText(filename, text){
     const blob = new Blob([text], {type:"text/plain;charset=utf-8"});
     const url = URL.createObjectURL(blob);
@@ -1483,7 +1380,6 @@
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(()=> URL.revokeObjectURL(url), 800);
   }
-
   function exportCSV(selectedList, filename){
     const rows = [["rank","name","lat","lng","score","d01","e01","g01","constr01","near01","cluster01","lsoa","dist_to_existing_m"]];
     selectedList.forEach((c,i)=>{
@@ -1501,7 +1397,6 @@
     const csv = rows.map(r => r.map(x => `"${x}"`).join(",")).join("\n");
     downloadText(filename, csv);
   }
-
   function exportGeoJSON(selectedList, filename){
     const fc = {
       type:"FeatureCollection",
@@ -1526,21 +1421,14 @@
     downloadText(filename, JSON.stringify(fc, null, 2));
   }
 
-  // ===============================
-  // 18) CLICK PRIORITY
-  // ===============================
   function setClickPriority(which){
     clickPriority = (which === "lsoa") ? "lsoa" : "ga";
     document.getElementById("pickLSOA").classList.toggle("active", clickPriority==="lsoa");
     document.getElementById("pickGA").classList.toggle("active", clickPriority==="ga");
-    // re-apply styles to swap zIndex
     if(lsoaPlanLayer) lsoaPlanLayer.setStyle(lsoaPlanLayer.getStyle());
     if(gaPlanLayer) gaPlanLayer.setStyle(gaPlanLayer.getStyle());
   }
 
-  // ===============================
-  // 19) RUN BOTH (MAIN)
-  // ===============================
   function runBoth(){
     const userP = Math.max(1, Math.floor(num(document.getElementById("pSel").value, 10)));
     const maxP = Math.max(10, Math.floor(num(document.getElementById("maxP").value, 150)));
@@ -1564,7 +1452,6 @@
     }
 
     updateCoverageUI();
-
     computeLSOAGapScores();
     computeDistancesToExisting();
     scoreCandidatesShared();
@@ -1574,10 +1461,7 @@
     const demandPoints = sampleCandidatesForCoverage();
     const ws = buildWorstServedCache(demandPoints);
 
-    // Displayed baseline uses UI mode (default greedy)
     selectedLSOA = runBaselineLSOA(P, null);
-
-    // GA seeding ALWAYS uses greedy+spacing baseline
     const seedPlan = runBaselineLSOA(P, "greedy");
     selectedGA = runGA(P, seedPlan, demandPoints, ws);
 
@@ -1587,33 +1471,25 @@
     lsoaPlanLayer.setMap(document.getElementById("ckLSOAPlan").checked ? map : null);
     gaPlanLayer.setMap(document.getElementById("ckGAPlan").checked ? map : null);
 
-    // Plan metrics
     const metA = computePlanMetrics(selectedLSOA, demandPoints, ws);
     const metB = computePlanMetrics(selectedGA, demandPoints, ws);
 
-    // Worst list details
     const afterA = computePlanWorstAfterByCode(selectedLSOA, demandPoints, ws);
     const afterB = computePlanWorstAfterByCode(selectedGA, demandPoints, ws);
     renderWorstList(ws, afterA, afterB);
 
-    // Other KPIs
     const savgA = selectedLSOA.reduce((a,b)=>a+num(b.score,0),0)/Math.max(1,selectedLSOA.length);
     const savgB = selectedGA.reduce((a,b)=>a+num(b.score,0),0)/Math.max(1,selectedGA.length);
-
     const dexA = avgDistToExisting(selectedLSOA);
     const dexB = avgDistToExisting(selectedGA);
-
     const redA = redundancyAvgNearestSelected(selectedLSOA);
     const redB = redundancyAvgNearestSelected(selectedGA);
 
-    // Equity eval
     const eqCovA = computeEquityWeightedCoverage(selectedLSOA, demandPoints);
     const eqCovB = computeEquityWeightedCoverage(selectedGA, demandPoints);
-
     const eqDispA = computeEquityDisparityQ5Q1(selectedLSOA, demandPoints);
     const eqDispB = computeEquityDisparityQ5Q1(selectedGA, demandPoints);
 
-    // Fill KPI UI
     document.getElementById("k_cov_lsoa").textContent = (metA.covAfter01*100).toFixed(0) + "%";
     document.getElementById("k_cov_ga").textContent   = (metB.covAfter01*100).toFixed(0) + "%";
 
@@ -1643,30 +1519,20 @@
     document.getElementById("btnExportCsvGA").disabled = selectedGA.length===0;
     document.getElementById("btnExportGeoGA").disabled = selectedGA.length===0;
 
-    // NEW: split shortlist lists
     renderSplitShortlists();
 
     const thrM = getCoverageThresholdDistM();
-    const mode = getCoverageMode();
-    const covLine = (mode === "time")
-      ? `Coverage mode=time (T=${getTimeThresholdMin()}min, detour=${getDetourK().toFixed(2)}, speed=${getSpeedKmh()}km/h, equivDist≈${Math.round(thrM)}m, sampleN=${getCoverageSampleN()})`
-      : `Coverage mode=distance (D=${(getServiceRadiusM()/1000).toFixed(1)}km, sampleN=${getCoverageSampleN()})`;
-
     setStatus(
       "Done (Both).\n" +
       `Year=${year}, target=${Math.round(target)}, supply=${Math.round(supplyTotal)}, gap=${Math.round(gap)}\n` +
       `Candidates=${candPts.length}, P=${P} (maxP=${maxP})\n` +
-      covLine + "\n" +
-      `Final coverage (existing+new): LSOA=${(metA.covAfter01*100).toFixed(0)}%, GA=${(metB.covAfter01*100).toFixed(0)}%\n` +
+      `Coverage threshold ≈ ${Math.round(thrM)}m (time-equivalent if time mode)\n` +
+      `Final coverage: LSOA=${(metA.covAfter01*100).toFixed(0)}%, GA=${(metB.covAfter01*100).toFixed(0)}%\n` +
       `Worst-served bottom ${ws.pct}%: min improve LSOA=${(metA.minImprove*100).toFixed(1)}pp, GA=${(metB.minImprove*100).toFixed(1)}pp\n` +
-      "GA seeding: Greedy+spacing LSOA baseline.\n" +
-      "Tip: Use Map click priority to click GA/LSOA without turning layers off."
+      "GA seeding: Greedy+spacing baseline.\n"
     );
   }
 
-  // ===============================
-  // 20) MAP INIT
-  // ===============================
   async function initMap(){
     map = new google.maps.Map(document.getElementById("map"), {
       center:{lat:51.4816,lng:-3.1791},
@@ -1690,7 +1556,6 @@
       return { icon: iconCircle("#f59e0b", hov ? 7 : 6, hov ? 3 : 2), zIndex: 700 };
     });
 
-    // IMPORTANT: zIndex depends on clickPriority (to allow clicking GA without hiding LSOA)
     lsoaPlanLayer.setStyle(ft => {
       const hov = !!ft.getProperty("_hover");
       const z = (clickPriority === "lsoa") ? 9999 : 9998;
@@ -1711,7 +1576,6 @@
         const pt = geom.get();
         const lat = pt.lat();
         const lng = pt.lng();
-
         const plan = e.feature.getProperty("plan");
         const rank = e.feature.getProperty("rank");
         const name = e.feature.getProperty("name");
@@ -1726,7 +1590,6 @@
         } else {
           html += `lat,lng: ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
         }
-
         info.setContent(html);
         info.setPosition({lat, lng});
         info.open({map});
@@ -1741,11 +1604,9 @@
     updateWeightUI();
     updateCoverageUI();
 
-    // UI toggles
     document.getElementById("ckSupply").addEventListener("change", e => supplyLayer.setMap(e.target.checked? map:null));
     document.getElementById("ckLSOA").addEventListener("change", e => lsoaLayer.setMap(e.target.checked? map:null));
     document.getElementById("ckCandidates").addEventListener("change", e => candLayer.setMap(e.target.checked? map:null));
-
     document.getElementById("ckLSOAPlan").addEventListener("change", e => lsoaPlanLayer.setMap(e.target.checked? map:null));
     document.getElementById("ckGAPlan").addEventListener("change", e => gaPlanLayer.setMap(e.target.checked? map:null));
 
@@ -1753,7 +1614,6 @@
     document.getElementById("tabGap").addEventListener("click", ()=> setTab("gap"));
     document.getElementById("tabCompare").addEventListener("click", ()=> setTab("compare"));
 
-    // click priority pills
     document.getElementById("pickLSOA").addEventListener("click", ()=> setClickPriority("lsoa"));
     document.getElementById("pickGA").addEventListener("click", ()=> setClickPriority("ga"));
     setClickPriority("ga");
@@ -1764,13 +1624,11 @@
     });
 
     document.getElementById("btnPrint").addEventListener("click", ()=> window.print());
-
     document.getElementById("btnExportCsvLSOA").addEventListener("click", ()=> exportCSV(selectedLSOA, "planner_lsoa.csv"));
     document.getElementById("btnExportGeoLSOA").addEventListener("click", ()=> exportGeoJSON(selectedLSOA, "planner_lsoa.geojson"));
     document.getElementById("btnExportCsvGA").addEventListener("click", ()=> exportCSV(selectedGA, "planner_ga.csv"));
     document.getElementById("btnExportGeoGA").addEventListener("click", ()=> exportGeoJSON(selectedGA, "planner_ga.geojson"));
 
-    // rerun after first run
     function maybeRerun(){
       updateWeightUI();
       updateCoverageUI();
@@ -1781,7 +1639,6 @@
       if(!el) return;
       el.addEventListener(evt, maybeRerun);
     }
-
     ["wDemand","wGap","wPenalty","wNear","wCluster"].forEach(id => hook(id, "input"));
     [
       "covMode","svcKm","svcMin","detourK","speedKmh",
@@ -1805,36 +1662,21 @@
       lsoaLayer.addGeoJson(lsoa);
       candLayer.addGeoJson(candidates);
 
-      // build LSOA index
       lsoaIndex = (lsoa.features||[]).map(f => {
         const props = f.properties || {};
         const code = getProp(props, FIELD.code, "LSOA");
-
         const pop  = num(getProp(props, FIELD.pop, null), NaN);
         const demandRaw = Number.isFinite(pop) ? pop : num(getProp(props, FIELD.demand, 1), 1);
-
         const medAge = num(getProp(props, FIELD.median_age, null), NaN);
         const equityRaw = computeEquityFromProps(props, medAge);
-
         const penaltyRaw = computePenaltyFromProps(props);
         const polygons = makePolygonsFromGeometry(f.geometry);
 
-        return {
-          code, pop, medianAge: medAge,
-          demandRaw, equityRaw, penaltyRaw,
-          polygons,
-          feature: null,
-          supplyRaw: 0,
-          gap01: 0,
-          equity01: 0,
-          need01: 0,
-          equityGroup: 3
-        };
+        return { code, pop, medianAge: medAge, demandRaw, equityRaw, penaltyRaw, polygons, feature:null, supplyRaw:0, gap01:0, equityGroup:3 };
       });
 
       lsoaByCodeMap = new Map(lsoaIndex.map(r => [r.code, r]));
 
-      // link Data layer feature -> record
       const lsoaByCode = new Map(lsoaIndex.map(r => [r.code, r]));
       lsoaLayer.forEach(ft => {
         const propsLike = {
@@ -1853,7 +1695,6 @@
         }
       });
 
-      // supply cache
       supplyPts = [];
       for(const f of (supply.features||[])){
         if(!f.geometry || f.geometry.type!=="Point") continue;
@@ -1866,7 +1707,6 @@
         supplyPts.push(attachRad({lat, lng, sockets: (sockets || 1)}));
       }
 
-      // candidate cache + join to LSOA
       candPts = [];
       for(const f of (candidates.features||[])){
         if(!f.geometry || f.geometry.type!=="Point") continue;
@@ -1877,7 +1717,6 @@
 
         const props = f.properties || {};
         const name = getProp(props, ["name","id","site","label","LSOA21NM","LSOA11NM"], "Candidate");
-
         const ll = new google.maps.LatLng(lat, lng);
         const rec = joinPointToLSOA(ll);
 
@@ -1888,23 +1727,19 @@
           equityRaw: rec ? num(rec.equityRaw, 0) : 0,
           penaltyRaw: rec ? num(rec.penaltyRaw, 0) : 0,
           gapRaw: 0,
-
           distToExistingM: NaN,
           distToExistingSq: Infinity,
-
           d01:0, e01:0, g01:0,
-          need01:0,
-          equityGroup:3,
           benefit:0, costBase:0, cost:0,
           costConstr01:0, costNear01:0, costCluster01:0,
-          scoreBase:0, score:0
+          scoreBase:0, score:0,
+          equityGroup:3
         }));
       }
 
       computeLSOAGapScores();
       styleLSOA();
 
-      // initial KPI text
       const year = String(document.getElementById("yearSel").value || "2030");
       const supplyTotal = computeSupplyTotal();
       document.getElementById("k_supply").textContent = String(Math.round(supplyTotal));
@@ -1924,8 +1759,9 @@
         "Supply points: " + supplyPts.length + "\n" +
         "LSOA polygons: " + (lsoa.features||[]).length + "\n" +
         "Candidates: " + candPts.length + "\n\n" +
-        "Click \"Run (Both)\" to generate the two plans.\n" +
-        "Tip: Use Map click priority to click GA/LSOA without turning layers off."
+        "Defaults updated:\n" +
+        "  T=6min, worstPct=20%, pop=120, gen=240,\n" +
+        "  mutation=0.45, seed=0.15, GA eval sample=80.\n"
       );
 
     } catch(err){
