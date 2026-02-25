@@ -1,0 +1,1688 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Cardiff EV Charging – Planner View (v2: GA vs LSOA)</title>
+  <style>
+    html, body { height:100%; margin:0; font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    #map { height:100%; width:100%; }
+    #map img { max-width:none !important; }
+
+    .panel{
+      position:absolute; top:12px; left:12px; z-index:5;
+      background:rgba(255,255,255,0.96);
+      border:1px solid #ddd; border-radius:14px;
+      padding:12px; width:520px;
+      box-shadow:0 4px 18px rgba(0,0,0,0.12);
+      max-height: calc(100vh - 24px);
+      overflow:auto;
+    }
+    .title{ font-weight:900; font-size:20px; margin:0 0 10px; }
+    .row{ display:flex; align-items:center; gap:10px; margin:8px 0; flex-wrap:wrap; }
+    .small{ color:#374151; font-size:12px; }
+    .muted{ color:#6b7280; font-size:12px; }
+    .btn{
+      background:#111827; color:#fff; border:none; border-radius:10px;
+      padding:10px 12px; cursor:pointer; font-size:13px; font-weight:900;
+    }
+    .btn.secondary{ background:#6b7280; }
+    .btn:disabled{ opacity:0.5; cursor:not-allowed; }
+
+    .input, select{
+      border:1px solid #e5e7eb; border-radius:10px;
+      padding:10px 12px; outline:none; font-size:13px; background:#fff;
+    }
+
+    .kpis{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:8px; }
+    .card{ border:1px solid #eee; border-radius:12px; padding:10px 12px; background:#fff; }
+    .card .h{ font-size:12px; color:#6b7280; margin-bottom:6px; }
+    .card .v{ font-size:18px; font-weight:900; color:#111827; }
+
+    .section{ margin-top:10px; padding-top:10px; border-top:1px solid #eee; }
+    .pill{
+      display:inline-flex; align-items:center;
+      border:1px solid #e5e7eb; border-radius:999px;
+      padding:6px 10px; font-size:12px; background:#fff;
+      cursor:pointer;
+    }
+    .pill.active{ background:#111827; color:#fff; border-color:#111827; }
+
+    .list{ margin-top:8px; max-height:240px; overflow:auto; border:1px solid #eee; border-radius:12px; background:#fff; }
+    .item{ padding:10px 12px; border-bottom:1px solid #f1f5f9; cursor:pointer; }
+    .item:hover{ background:#f8fafc; }
+    .item:last-child{ border-bottom:none; }
+    .itemTitle{ font-weight:900; font-size:13px; margin-bottom:4px; }
+    .itemMeta{ font-size:12px; color:#374151; display:flex; gap:10px; flex-wrap:wrap; }
+    .badge{
+      display:inline-flex; align-items:center;
+      padding:2px 8px; border-radius:999px;
+      border:1px solid #e5e7eb; font-size:12px; color:#111827;
+      background:#fff;
+    }
+
+    .status{ margin-top:8px; font-size:12px; color:#111827; white-space:pre-wrap; }
+    .legend{ margin-top:10px; font-size:12px; line-height:1.35; }
+    .swatch{ display:inline-block; width:12px; height:12px; border-radius:999px; margin-right:8px; border:2px solid rgba(255,255,255,0.9); box-shadow:0 0 0 1px rgba(0,0,0,0.12); }
+
+    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    details summary{ cursor:pointer; font-weight:800; }
+  </style>
+</head>
+
+<body>
+<div id="map"></div>
+
+<div class="panel">
+  <div class="title">Planner view (Cardiff) – v2 (GA vs LSOA baseline)</div>
+  <div class="muted">
+    Data: existing chargers (OCM) + LSOA boundary (enriched) + candidates (PoIs).
+    Compare two methods: <b>LSOA-driven baseline</b> vs <b>Genetic Algorithm</b>.
+  </div>
+
+  <div class="section">
+    <div style="font-weight:900; margin-bottom:6px;">Scenario (Top P) + compare algorithms</div>
+    <div class="row">
+      <label class="small">Target year</label>
+      <select id="yearSel">
+        <option value="2026">2026</option>
+        <option value="2030" selected>2030</option>
+        <option value="2035">2035</option>
+      </select>
+
+      <label class="small">Add P</label>
+      <input id="pSel" class="input" style="width:90px" type="number" min="1" value="10"/>
+
+      <button id="btnRun" class="btn">Run (Both)</button>
+    </div>
+
+    <div class="row">
+      <span class="pill active" id="tabKpi">KPIs</span>
+      <span class="pill" id="tabGap">Gap map</span>
+      <span class="pill" id="tabCompare">Compare</span>
+    </div>
+
+    <div class="row">
+      <label class="small"><input id="ckSupply" type="checkbox" checked> Existing chargers</label>
+      <label class="small"><input id="ckLSOA" type="checkbox" checked> LSOA boundary</label>
+      <label class="small"><input id="ckCandidates" type="checkbox" checked> Candidates</label>
+    </div>
+
+    <div class="row">
+      <label class="small"><input id="ckLSOAPlan" type="checkbox" checked> Show LSOA plan</label>
+      <label class="small"><input id="ckGAPlan" type="checkbox" checked> Show GA plan</label>
+    </div>
+
+    <div class="row">
+      <button id="btnExportCsvLSOA" class="btn secondary" disabled>Export LSOA (CSV)</button>
+      <button id="btnExportGeoLSOA" class="btn secondary" disabled>Export LSOA (GeoJSON)</button>
+      <button id="btnExportCsvGA" class="btn secondary" disabled>Export GA (CSV)</button>
+      <button id="btnExportGeoGA" class="btn secondary" disabled>Export GA (GeoJSON)</button>
+      <button id="btnPrint" class="btn secondary">Print</button>
+    </div>
+
+    <div class="muted">
+      <b>Shared score components (transparent)</b><br/>
+      <span class="mono" id="scoreFormulaInline">–</span><br/>
+      <b>Equity is NOT used in scoring</b>. Equity is evaluated <b>after optimisation</b> as a judgement criterion (planner fairness check).<br/>
+      Cost = wP·Constraint + wN·NearExisting + wC·Cluster (0–1)<br/>
+      GA optimizes an objective based on <b>coverage (primary) + score (secondary)</b> with constraints.
+    </div>
+
+    <details style="margin-top:8px;">
+      <summary class="small">Advanced options</summary>
+
+      <div class="row" style="margin-top:10px;">
+        <div class="badge" style="font-weight:900;">Coverage mode</div>
+      </div>
+
+      <!-- Coverage mode -->
+      <div class="row">
+        <label class="small" style="min-width:160px;">Coverage metric</label>
+        <select id="covMode">
+          <option value="distance">Distance (km radius)</option>
+          <option value="time" selected>Travel-time approx (minutes)</option>
+        </select>
+        <span class="muted">Default uses time (approx).</span>
+      </div>
+
+      <!-- Distance coverage radius -->
+      <div class="row" id="rowSvcKm">
+        <label class="small" style="min-width:160px;">Service radius D (km)</label>
+        <input id="svcKm" class="input" style="width:90px" type="number" min="0.2" step="0.1" value="1.5"/>
+        <span class="muted">Used for distance coverage & NearExisting scaling.</span>
+      </div>
+
+      <!-- Time coverage threshold -->
+      <div class="row" id="rowTimeMin">
+        <label class="small" style="min-width:160px;">Time threshold T (min)</label>
+        <input id="svcMin" class="input" style="width:90px" type="number" min="2" step="1" value="8"/>
+        <span class="muted">Covered if ≤ T minutes (approx).</span>
+      </div>
+
+      <!-- Time approximation controls -->
+      <div class="row">
+        <label class="small" style="min-width:160px;">Detour factor</label>
+        <input id="detourK" class="input" style="width:90px" type="number" min="1.0" max="2.5" step="0.05" value="1.25"/>
+        <span class="muted">Road distance ≈ haversine × k.</span>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">Speed (km/h)</label>
+        <input id="speedKmh" class="input" style="width:90px" type="number" min="10" max="80" step="1" value="28"/>
+        <span class="muted">Average driving speed (planning).</span>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">Min spacing (m)</label>
+        <input id="minSpacing" class="input" style="width:90px" type="number" min="0" step="50" value="700"/>
+        <label class="small"><input id="ckSpread" type="checkbox" checked> enforce spread</label>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">Baseline selection</label>
+        <select id="selMode">
+          <option value="rank" selected>Rank by score (fast)</option>
+          <option value="greedy">Greedy + spacing (more spread)</option>
+        </select>
+      </div>
+
+      <div class="row" style="margin-top:6px;">
+        <div class="badge" style="font-weight:900;">Weights (NO equity in score)</div>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">Demand wD</label>
+        <input id="wDemand" type="range" min="0" max="1" step="0.01" value="0.65" style="flex:1;">
+        <span class="badge" id="wDemandVal">0.65</span>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">Gap wG</label>
+        <input id="wGap" type="range" min="0" max="1" step="0.01" value="0.35" style="flex:1;">
+        <span class="badge" id="wGapVal">0.35</span>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">Constraint wP</label>
+        <input id="wPenalty" type="range" min="0" max="1" step="0.01" value="0.25" style="flex:1;">
+        <span class="badge" id="wPenaltyVal">0.25</span>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">NearExisting wN</label>
+        <input id="wNear" type="range" min="0" max="1" step="0.01" value="0.20" style="flex:1;">
+        <span class="badge" id="wNearVal">0.20</span>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">Cluster wC</label>
+        <input id="wCluster" type="range" min="0" max="1" step="0.01" value="0.25" style="flex:1;">
+        <span class="badge" id="wClusterVal">0.25</span>
+      </div>
+
+      <div class="row" style="margin-top:10px;">
+        <div class="badge" style="font-weight:900;">Equity evaluation (NOT in score)</div>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">Equity direction</label>
+        <select id="equityDir">
+          <option value="highNeedHigh" selected>Higher = higher need</option>
+          <option value="highNeedLow">Lower = higher need</option>
+        </select>
+        <span class="muted">Affects equity-weighted coverage & quintiles.</span>
+      </div>
+
+      <div class="row" style="margin-top:10px;">
+        <div class="badge" style="font-weight:900;">GA settings</div>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">Population</label>
+        <input id="gaPop" class="input" style="width:90px" type="number" min="10" step="10" value="60"/>
+        <label class="small" style="min-width:120px;">Generations</label>
+        <input id="gaGen" class="input" style="width:90px" type="number" min="10" step="10" value="120"/>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">Mutation rate</label>
+        <input id="gaMut" class="input" style="width:90px" type="number" min="0" max="1" step="0.01" value="0.25"/>
+        <label class="small" style="min-width:120px;">Elite rate</label>
+        <input id="gaElite" class="input" style="width:90px" type="number" min="0" max="0.5" step="0.01" value="0.10"/>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">Seed with LSOA (%)</label>
+        <input id="gaSeedPct" class="input" style="width:90px" type="number" min="0" max="0.8" step="0.05" value="0.30"/>
+        <span class="muted">Warm-start GA with baseline plan.</span>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">GA objective mix</label>
+        <select id="gaObjective">
+          <option value="score">Score only (no equity)</option>
+          <option value="cov" selected>Coverage + Score (coverage-first)</option>
+          <option value="cov_red">Coverage + Score + Spread</option>
+        </select>
+      </div>
+
+      <div class="row" style="margin-top:10px;">
+        <div class="badge" style="font-weight:900;">Performance (P=100 safe)</div>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">Coverage sample (candidates)</label>
+        <input id="covSampleN" class="input" style="width:90px" type="number" min="200" step="100" value="800"/>
+        <span class="muted">Coverage computed on a sample for speed.</span>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">GA eval sample (population)</label>
+        <input id="gaEvalSample" class="input" style="width:90px" type="number" min="10" step="10" value="30"/>
+        <span class="muted">Only evaluate a subset of solutions per gen.</span>
+      </div>
+
+      <div class="row">
+        <label class="small" style="min-width:160px;">Max P (guard)</label>
+        <input id="maxP" class="input" style="width:90px" type="number" min="10" step="10" value="150"/>
+        <span class="muted">Avoids browser freeze.</span>
+      </div>
+    </details>
+  </div>
+
+  <div class="section">
+    <div style="font-weight:900; margin-bottom:6px;">Needs & gap dashboard</div>
+    <div class="kpis">
+      <div class="card"><div class="h">Current supply (sockets/points)</div><div class="v" id="k_supply">–</div></div>
+      <div class="card"><div class="h">Target sockets (year)</div><div class="v" id="k_target">–</div></div>
+      <div class="card"><div class="h">Gap (target - supply)</div><div class="v" id="k_gap">–</div></div>
+      <div class="card"><div class="h">Candidates</div><div class="v" id="k_candidates">–</div></div>
+    </div>
+    <div class="status" id="status"></div>
+  </div>
+
+  <!-- KPI Tab -->
+  <div class="section" id="kpiPanel">
+    <div style="font-weight:900; margin-bottom:6px;">KPI comparison</div>
+    <div class="kpis">
+      <div class="card"><div class="h">LSOA: demand-weighted coverage</div><div class="v" id="k_cov_lsoa">–</div></div>
+      <div class="card"><div class="h">GA: demand-weighted coverage</div><div class="v" id="k_cov_ga">–</div></div>
+
+      <div class="card"><div class="h">LSOA: avg dist to existing (m)</div><div class="v" id="k_dexist_lsoa">–</div></div>
+      <div class="card"><div class="h">GA: avg dist to existing (m)</div><div class="v" id="k_dexist_ga">–</div></div>
+
+      <div class="card"><div class="h">LSOA: avg score (no equity)</div><div class="v" id="k_savg_lsoa">–</div></div>
+      <div class="card"><div class="h">GA: avg score (no equity)</div><div class="v" id="k_savg_ga">–</div></div>
+
+      <div class="card"><div class="h">LSOA: redundancy (avg nearest selected m)</div><div class="v" id="k_red_lsoa">–</div></div>
+      <div class="card"><div class="h">GA: redundancy (avg nearest selected m)</div><div class="v" id="k_red_ga">–</div></div>
+
+      <!-- NEW: equity evaluation (NOT in score) -->
+      <div class="card"><div class="h">LSOA: equity-weighted coverage</div><div class="v" id="k_eqcov_lsoa">–</div></div>
+      <div class="card"><div class="h">GA: equity-weighted coverage</div><div class="v" id="k_eqcov_ga">–</div></div>
+
+      <div class="card"><div class="h">LSOA: equity disparity (Q5 − Q1)</div><div class="v" id="k_eqgap_lsoa">–</div></div>
+      <div class="card"><div class="h">GA: equity disparity (Q5 − Q1)</div><div class="v" id="k_eqgap_ga">–</div></div>
+    </div>
+    <div class="muted" style="margin-top:6px;">
+      Coverage uses Distance radius D or Travel-time threshold T. Redundancy is average distance to nearest other selected site (higher = more spread).
+      Equity metrics are computed post-hoc (not part of optimisation score).
+    </div>
+  </div>
+
+  <!-- Compare Tab -->
+  <div class="section" id="comparePanel" style="display:none;">
+    <div class="row" style="justify-content:space-between;">
+      <div style="font-weight:900;">Shortlists</div>
+      <span class="badge" id="countBadge">0 / 0</span>
+    </div>
+
+    <div class="row">
+      <span class="badge" style="border-color:#ef4444;">LSOA plan</span>
+      <span class="badge" style="border-color:#7c3aed;">GA plan</span>
+    </div>
+
+    <div class="list" id="compareList"></div>
+  </div>
+
+  <div class="legend">
+    <b>Legend</b><br/>
+    <div><span class="swatch" style="background:#2563eb;"></span>Blue: existing chargers</div>
+    <div><span class="swatch" style="background:#f59e0b;"></span>Orange: candidates (PoIs)</div>
+    <div><span class="swatch" style="background:#ef4444;"></span>Red star: selected by LSOA baseline</div>
+    <div><span class="swatch" style="background:#7c3aed;"></span>Purple diamond: selected by GA</div>
+    <div class="muted" style="margin-top:6px;">Gap map colors LSOA by high demand + low provision.</div>
+  </div>
+</div>
+
+<script>
+  // ===============================
+  // 0) CONFIG
+  // ===============================
+  const GMAPS_KEY = "AIzaSyAUproFl8jRStUlFwOKbQ8yh2CjNJ_H2c4"; // your key
+
+  const BASE = new URL("./", window.location.href);
+  const DATA_URLS = {
+    supply:     new URL("data/processed/supply_chargers_ocm.geojson", BASE).href,
+    lsoa:       new URL("data/processed/demand_lsoa_cardiff_exact_pop_wgs84_enriched.geojson", BASE).href,
+    candidates: new URL("data/processed/demand_points_cardiff_exact_pop_wgs84.geojson", BASE).href
+  };
+
+  const CARDIFF_BOUNDS = { north: 51.566, south: 51.410, east: -3.065, west: -3.333 };
+  const TARGET_BY_YEAR = { "2026": 700, "2030": 1500, "2035": 2000 };
+
+  let hasRun = false;
+  const AUTO_RERUN_AFTER_FIRST_RUN = true;
+
+  // ===============================
+  // 1) FIELD MAPS
+  // ===============================
+  const FIELD = {
+    code:   ["LSOA21CD","lsoa21cd","LSOA11CD","lsoa11cd","code","id"],
+    pop:    ["population","pop","pop_total","Pop","total_pop","Total"],
+    demand: ["demand","demand_score","ev_owners","owners","weight"],
+    equity_proxy: ["equity_proxy","equity_wimd","equity_norm"],
+    wimd_norm:    ["wimd_norm","imd_norm","wimd2019_norm"],
+    wimd_rank:    ["wimd_rank","imd_rank","wimd2019_rank"],
+    wimd_decile:  ["wimd_decile","imd_decile","wimd2019_decile"],
+    median_age:   ["median_age","median age","Median age mid-2024","Median age mid-2023","Median age mid-2022"],
+    parking_constraint: ["parking_constraint","constraint","install_constraint"],
+    share_flats:  ["share_flats","pct_flats","flats_share"],
+    share_dense:  ["share_dense","pct_dense","dense_share","share_terraced","pct_terraced"],
+    share_rented: ["share_rented","pct_rented","rented_share"],
+    share_no_car: ["share_no_car","pct_no_car","no_car_share"],
+    sockets:["sockets","SocketCount","socket_count","connectors","num_sockets","units"],
+    name:   ["name","operator","location","Site","address","Address"]
+  };
+
+  // ===============================
+  // 2) STATE
+  // ===============================
+  let map, info;
+  let supplyLayer, lsoaLayer, candLayer, lsoaPlanLayer, gaPlanLayer;
+
+  let lsoaIndex = [];
+  let lsoaByCodeMap = new Map();
+  let supplyPts = [];
+  let candPts = [];
+
+  let selectedLSOA = [];
+  let selectedGA = [];
+  let activeTab = "kpi";
+
+  // ===============================
+  // 3) UTILS
+  // ===============================
+  function setStatus(msg){ document.getElementById("status").textContent = msg || ""; }
+  function escapeHtml(s){
+    return String(s||"").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+  }
+  function num(x, fb=0){ const v=Number(x); return Number.isFinite(v)? v: fb; }
+  function clamp01(x){ return Math.max(0, Math.min(1, x)); }
+  function pctTo01(x){
+    const v = num(x, NaN);
+    if(!Number.isFinite(v)) return NaN;
+    return (v > 1.0001) ? clamp01(v/100) : clamp01(v);
+  }
+  function getProp(props, keys, fb=null){
+    for(const k of keys){
+      if(props && props[k] !== undefined && props[k] !== null && props[k] !== "") return props[k];
+    }
+    return fb;
+  }
+  async function loadGeoJSON(url){
+    const res = await fetch(url,{cache:"no-store"});
+    if(!res.ok) throw new Error("Fetch failed: " + res.status + " " + url);
+    return await res.json();
+  }
+  function looksLike27700(lng, lat){ return Math.abs(lng) > 1000 || Math.abs(lat) > 1000; }
+
+  // Haversine (m)
+  function distMeters(aLat, aLng, bLat, bLng){
+    const R = 6371000;
+    const toRad = x => x * Math.PI / 180;
+    const dLat = toRad(bLat - aLat);
+    const dLng = toRad(bLng - aLng);
+    const s1 = Math.sin(dLat/2), s2 = Math.sin(dLng/2);
+    const q = s1*s1 + Math.cos(toRad(aLat))*Math.cos(toRad(bLat))*s2*s2;
+    return 2*R*Math.asin(Math.min(1, Math.sqrt(q)));
+  }
+
+  // ===============================
+  // 3.1) travel-time approximation
+  // ===============================
+  function getDetourK(){ return Math.max(1.0, Math.min(2.5, num(document.getElementById("detourK").value, 1.25))); }
+  function getSpeedKmh(){ return Math.max(10, Math.min(80, num(document.getElementById("speedKmh").value, 28))); }
+  function getTimeThresholdMin(){ return Math.max(2, num(document.getElementById("svcMin").value, 8)); }
+  function getCoverageMode(){ return String(document.getElementById("covMode").value || "time"); }
+
+  function travelTimeMinutesApprox(distM){
+    const k = getDetourK();
+    const speed = getSpeedKmh();
+    const roadKm = (distM * k) / 1000;
+    return (roadKm / speed) * 60;
+  }
+
+  function updateCoverageUI(){
+    const mode = getCoverageMode();
+    const rowSvc = document.getElementById("rowSvcKm");
+    const rowT   = document.getElementById("rowTimeMin");
+    if(mode === "time"){
+      rowT.style.display = "flex";
+      rowSvc.style.display = "none";
+    } else {
+      rowT.style.display = "none";
+      rowSvc.style.display = "flex";
+    }
+  }
+
+  // Symbols
+  function iconCircle(fill, scale, strokeW){
+    return { path: google.maps.SymbolPath.CIRCLE, fillColor:fill, fillOpacity:1,
+      strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:strokeW, scale: scale };
+  }
+  function iconStar(fill, scale){
+    return { path:"M 0,-10 L 2,-3 L 10,-3 L 4,1 L 6,9 L 0,4 L -6,9 L -4,1 L -10,-3 L -2,-3 Z",
+      fillColor:fill, fillOpacity:0.95, strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:1, scale:scale };
+  }
+  function iconDiamond(fill, scale){
+    return { path:"M 0,-10 L 10,0 L 0,10 L -10,0 Z",
+      fillColor:fill, fillOpacity:0.95, strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:1, scale:scale };
+  }
+
+  // ===============================
+  // 4) EQUITY & PENALTY
+  // ===============================
+  function computeEquityFromProps(props, fallbackMedianAge){
+    const equityProxy = getProp(props, FIELD.equity_proxy, null);
+    if(equityProxy !== null) return num(equityProxy, 0);
+
+    const wimdNorm = getProp(props, FIELD.wimd_norm, null);
+    if(wimdNorm !== null) return num(wimdNorm, 0);
+
+    const r = num(getProp(props, FIELD.wimd_rank, NaN), NaN);
+    if(Number.isFinite(r)) return -r;
+
+    const d = num(getProp(props, FIELD.wimd_decile, NaN), NaN);
+    if(Number.isFinite(d)) return (11 - d) / 10;
+
+    return Number.isFinite(fallbackMedianAge) ? fallbackMedianAge : 0;
+  }
+
+  function computePenaltyFromProps(props){
+    const pc = getProp(props, FIELD.parking_constraint, null);
+    if(pc !== null){
+      const v = pctTo01(pc);
+      if(Number.isFinite(v)) return v;
+    }
+
+    const flats  = pctTo01(getProp(props, FIELD.share_flats, NaN));
+    const dense  = pctTo01(getProp(props, FIELD.share_dense, NaN));
+    const rented = pctTo01(getProp(props, FIELD.share_rented, NaN));
+    const nocar  = pctTo01(getProp(props, FIELD.share_no_car, NaN));
+
+    const arr = [flats,dense,rented,nocar].filter(Number.isFinite);
+    if(arr.length === 0) return 0;
+
+    const wFlats = 0.40, wDense = 0.25, wRented = 0.25, wNoCar = 0.10;
+    const val =
+      (Number.isFinite(flats)  ? wFlats*flats  : 0) +
+      (Number.isFinite(dense)  ? wDense*dense  : 0) +
+      (Number.isFinite(rented) ? wRented*rented: 0) +
+      (Number.isFinite(nocar)  ? wNoCar*nocar  : 0);
+
+    return clamp01(val);
+  }
+
+  // ===============================
+  // 5) WEIGHTS & FORMULA TEXT  (NO equity in score)
+  // ===============================
+  function getWeights(){
+    let wd = num(document.getElementById("wDemand").value, 0.65);
+    let wg = num(document.getElementById("wGap").value,    0.35);
+    const sumB = wd + wg;
+    if(sumB > 0){ wd/=sumB; wg/=sumB; }
+    else { wd=0.65; wg=0.35; }
+
+    let wp = num(document.getElementById("wPenalty").value, 0.25);
+    let wn = num(document.getElementById("wNear").value,    0.20);
+    let wc = num(document.getElementById("wCluster").value, 0.25);
+
+    return { wd, wg, wp, wn, wc };
+  }
+
+  function updateWeightUI(){
+    const w = getWeights();
+    document.getElementById("wDemandVal").textContent  = w.wd.toFixed(2);
+    document.getElementById("wGapVal").textContent     = w.wg.toFixed(2);
+    document.getElementById("wPenaltyVal").textContent = w.wp.toFixed(2);
+    document.getElementById("wNearVal").textContent    = w.wn.toFixed(2);
+    document.getElementById("wClusterVal").textContent = w.wc.toFixed(2);
+
+    const txt =
+      "Score = Benefit − Cost;  Benefit = " +
+      w.wd.toFixed(2) + "·D + " + w.wg.toFixed(2) + "·Gap; " +
+      "Cost = " + w.wp.toFixed(2) + "·Constr + " + w.wn.toFixed(2) + "·Near + " + w.wc.toFixed(2) + "·Cluster";
+    document.getElementById("scoreFormulaInline").textContent = txt;
+  }
+
+  // ===============================
+  // 6) TABS & CHOROPLETH
+  // ===============================
+  function setTab(tab){
+    activeTab = tab;
+    document.getElementById("tabKpi").classList.toggle("active", tab==="kpi");
+    document.getElementById("tabGap").classList.toggle("active", tab==="gap");
+    document.getElementById("tabCompare").classList.toggle("active", tab==="compare");
+
+    document.getElementById("kpiPanel").style.display = (tab==="kpi") ? "block" : "none";
+    document.getElementById("comparePanel").style.display = (tab==="compare") ? "block" : "none";
+
+    styleLSOA();
+  }
+
+  function styleLSOA(){
+    if(!lsoaLayer) return;
+
+    if(activeTab === "gap"){
+      lsoaLayer.setStyle(ft => {
+        const s = num(ft.getProperty("_gapScore"), 0);
+        let fill = "#10b981";
+        if(s > 0.66) fill = "#f87171";
+        else if(s > 0.33) fill = "#f59e0b";
+        return { fillColor: fill, fillOpacity: 0.42, strokeColor: "#111827", strokeOpacity: 0.75, strokeWeight: 2.5 };
+      });
+    } else {
+      lsoaLayer.setStyle({ fillColor: "#93c5fd", fillOpacity: 0.18, strokeColor: "#2563eb", strokeOpacity: 0.85, strokeWeight: 2.5 });
+    }
+  }
+
+  // ===============================
+  // 7) POLYGON HELPERS (LSOA join)
+  // ===============================
+  function makePolygonsFromGeometry(geom){
+    const polys = [];
+    if(!geom) return polys;
+
+    const toPath = ring => ring.map(x => ({lat:x[1], lng:x[0]}));
+    const buildPoly = rings => new google.maps.Polygon({ paths: rings.map(toPath) });
+
+    if(geom.type === "Polygon") polys.push(buildPoly(geom.coordinates));
+    else if(geom.type === "MultiPolygon"){
+      for(const poly of geom.coordinates) polys.push(buildPoly(poly));
+    }
+    return polys;
+  }
+
+  function containsAny(polys, latLng){
+    for(const p of polys){
+      if(google.maps.geometry.poly.containsLocation(latLng, p)) return true;
+    }
+    return false;
+  }
+
+  function joinPointToLSOA(latLng){
+    for(const rec of lsoaIndex){
+      if(containsAny(rec.polygons, latLng)) return rec;
+    }
+    return null;
+  }
+
+  function normalize01(arr){
+    let mn=Infinity, mx=-Infinity;
+    for(const v of arr){
+      if(!Number.isFinite(v)) continue;
+      mn=Math.min(mn,v); mx=Math.max(mx,v);
+    }
+    if(!Number.isFinite(mn) || !Number.isFinite(mx) || mn===mx) return { norm: _ => 0.5 };
+    return { norm: x => (x-mn)/(mx-mn) };
+  }
+
+  function getServiceRadiusM(){
+    const km = Math.max(0.2, num(document.getElementById("svcKm").value, 1.5));
+    return km * 1000;
+  }
+
+  // ===============================
+  // 8) GAP SCORE (LSOA underserved)
+  // ===============================
+  function computeSupplyTotal(){
+    let sum = 0;
+    for(const p of supplyPts) sum += num(p.sockets, 0);
+    if(sum === 0 && supplyPts.length) sum = supplyPts.length;
+    return sum;
+  }
+
+  function computeLSOAGapScores(){
+    const supplyByLSOA = new Map();
+    for(const s of supplyPts){
+      const ll = new google.maps.LatLng(s.lat, s.lng);
+      const rec = joinPointToLSOA(ll);
+      if(!rec) continue;
+      supplyByLSOA.set(rec.code, (supplyByLSOA.get(rec.code) || 0) + num(s.sockets, 1));
+    }
+
+    const demandArr = [];
+    const supplyArr = [];
+    for(const rec of lsoaIndex){
+      rec.supplyRaw = supplyByLSOA.get(rec.code) || 0;
+      demandArr.push(num(rec.demandRaw, 0));
+      supplyArr.push(num(rec.supplyRaw, 0));
+    }
+
+    const nd = normalize01(demandArr);
+    const ns = normalize01(supplyArr);
+
+    for(const rec of lsoaIndex){
+      if(!rec.feature) continue;
+      const d01 = nd.norm(num(rec.demandRaw, 0));
+      const s01 = ns.norm(num(rec.supplyRaw, 0));
+      const g = Math.max(0, Math.min(1, d01 - 0.7*s01));
+      rec.gap01 = g;
+      rec.feature.setProperty("_gapScore", g);
+    }
+
+    for(const c of candPts){
+      const ll = new google.maps.LatLng(c.lat, c.lng);
+      const rec = joinPointToLSOA(ll);
+      c.gapRaw = rec ? num(rec.gap01, 0) : 0;
+    }
+  }
+
+  // ===============================
+  // 9) COVERAGE & REDUNDANCY KPIs
+  // ===============================
+  function getCoverageSampleN(){
+    return Math.max(200, Math.floor(num(document.getElementById("covSampleN").value, 800)));
+  }
+  function sampleCandidatesForCoverage(){
+    const N = candPts.length;
+    const want = Math.min(getCoverageSampleN(), N);
+    if(want >= N) return candPts;
+
+    const step = Math.max(1, Math.floor(N / want));
+    const out = [];
+    for(let i=0; i<N && out.length<want; i+=step){
+      out.push(candPts[i]);
+    }
+    while(out.length < want) out.push(candPts[out.length % N]);
+    return out;
+  }
+
+  function computeCoverageDemand(selectedList){
+    if(!selectedList.length || !candPts.length) return { covW:0, avgDist:NaN };
+
+    const mode = getCoverageMode();
+    const R = getServiceRadiusM();
+    const T = getTimeThresholdMin();
+
+    const demandPoints = sampleCandidatesForCoverage();
+
+    let coveredW = 0, totalW = 0;
+    let distSum = 0, distN = 0;
+
+    for(const c of demandPoints){
+      const w = Math.max(0, num(c.demandRaw, 1));
+      totalW += w;
+
+      let bestDist = Infinity;
+      for(const s of selectedList){
+        const d = distMeters(c.lat,c.lng,s.lat,s.lng);
+        if(d < bestDist) bestDist = d;
+      }
+
+      if(Number.isFinite(bestDist)){
+        distSum += bestDist; distN++;
+      }
+
+      if(mode === "time"){
+        const bestT = travelTimeMinutesApprox(bestDist);
+        if(bestT <= T) coveredW += w;
+      } else {
+        if(bestDist <= R) coveredW += w;
+      }
+    }
+
+    return { covW: totalW>0 ? coveredW/totalW : 0, avgDist: distN>0 ? distSum/distN : NaN };
+  }
+
+  function avgDistToExisting(selectedList){
+    const arr = selectedList.map(x => num(x.distToExistingM, NaN)).filter(Number.isFinite);
+    if(!arr.length) return NaN;
+    return arr.reduce((a,b)=>a+b,0)/arr.length;
+  }
+
+  function redundancyAvgNearestSelected(selectedList){
+    if(selectedList.length < 2) return NaN;
+    const dists = [];
+    for(const a of selectedList){
+      let best = Infinity;
+      for(const b of selectedList){
+        if(a === b) continue;
+        const d = distMeters(a.lat,a.lng,b.lat,b.lng);
+        if(d < best) best = d;
+      }
+      if(Number.isFinite(best)) dists.push(best);
+    }
+    if(!dists.length) return NaN;
+    return dists.reduce((x,y)=>x+y,0)/dists.length;
+  }
+
+  // ===============================
+  // 9.1) NEW: Equity evaluation helpers (NOT in score)
+  // ===============================
+  function getEquityDir(){
+    const el = document.getElementById("equityDir");
+    return el ? String(el.value || "highNeedHigh") : "highNeedHigh";
+  }
+  function equityNeed01FromE01(e01){
+    const v = clamp01(num(e01, 0.5));
+    return (getEquityDir() === "highNeedLow") ? (1 - v) : v;
+  }
+
+  // equity-weighted coverage: weights demand more if higher-need (planner fairness lens)
+  function computeEquityWeightedCoverage(selectedList){
+    if(!selectedList.length || !candPts.length) return 0;
+
+    const mode = getCoverageMode();
+    const R = getServiceRadiusM();
+    const T = getTimeThresholdMin();
+
+    const demandPoints = sampleCandidatesForCoverage();
+
+    let coveredW = 0, totalW = 0;
+
+    for(const c of demandPoints){
+      const demandW = Math.max(0, num(c.demandRaw, 1));
+      const need01 = equityNeed01FromE01(c.e01);
+      // avoid zeroing out any area; [0.2, 1.0]
+      const eqW = (0.2 + 0.8*need01);
+
+      const w = demandW * eqW;
+      totalW += w;
+
+      let bestDist = Infinity;
+      for(const s of selectedList){
+        const d = distMeters(c.lat,c.lng,s.lat,s.lng);
+        if(d < bestDist) bestDist = d;
+      }
+
+      let covered = false;
+      if(mode === "time"){
+        covered = travelTimeMinutesApprox(bestDist) <= T;
+      } else {
+        covered = bestDist <= R;
+      }
+      if(covered) coveredW += w;
+    }
+
+    return totalW > 0 ? coveredW/totalW : 0;
+  }
+
+  function computeEquityGroupsFromLSOA(){
+    if(!lsoaIndex.length) return;
+
+    // normalize equityRaw at LSOA level to get consistent quintiles
+    const eN = normalize01(lsoaIndex.map(r => r.equityRaw));
+    const needVals = [];
+    for(const r of lsoaIndex){
+      r.equity01 = eN.norm(num(r.equityRaw, 0));
+      r.need01 = equityNeed01FromE01(r.equity01);
+      needVals.push(r.need01);
+    }
+    needVals.sort((a,b)=>a-b);
+
+    function quantile(p){
+      if(needVals.length === 0) return 0.5;
+      const idx = Math.max(0, Math.min(needVals.length-1, Math.floor(p*(needVals.length-1))));
+      return needVals[idx];
+    }
+    const t1 = quantile(0.20), t2 = quantile(0.40), t3 = quantile(0.60), t4 = quantile(0.80);
+
+    for(const r of lsoaIndex){
+      const v = r.need01;
+      let g = 1;
+      if(v > t1) g = 2;
+      if(v > t2) g = 3;
+      if(v > t3) g = 4;
+      if(v > t4) g = 5;
+      r.equityGroup = g; // Q5 = higher-need group
+    }
+
+    // propagate to candidates
+    for(const c of candPts){
+      const rec = c.lsoaCode ? lsoaByCodeMap.get(c.lsoaCode) : null;
+      c.equityGroup = rec ? rec.equityGroup : 3;
+      c.need01 = equityNeed01FromE01(c.e01);
+    }
+  }
+
+  function computeEquityDisparityQ5Q1(selectedList){
+    if(!selectedList.length || !candPts.length) return { q1:NaN, q5:NaN, diff:NaN };
+
+    const mode = getCoverageMode();
+    const R = getServiceRadiusM();
+    const T = getTimeThresholdMin();
+    const demandPoints = sampleCandidatesForCoverage();
+
+    const total = Array(6).fill(0);
+    const covered = Array(6).fill(0);
+
+    for(const c of demandPoints){
+      const g = Math.max(1, Math.min(5, Math.floor(num(c.equityGroup, 3))));
+      const w = Math.max(0, num(c.demandRaw, 1));
+      total[g] += w;
+
+      let bestDist = Infinity;
+      for(const s of selectedList){
+        const d = distMeters(c.lat,c.lng,s.lat,s.lng);
+        if(d < bestDist) bestDist = d;
+      }
+
+      let ok = false;
+      if(mode === "time") ok = travelTimeMinutesApprox(bestDist) <= T;
+      else ok = bestDist <= R;
+
+      if(ok) covered[g] += w;
+    }
+
+    const q1 = total[1] > 0 ? covered[1]/total[1] : NaN;
+    const q5 = total[5] > 0 ? covered[5]/total[5] : NaN;
+    const diff = (Number.isFinite(q1) && Number.isFinite(q5)) ? (q5 - q1) : NaN;
+    return { q1, q5, diff };
+  }
+
+  // ===============================
+  // 10) DISTANCE TO EXISTING (near cost)
+  // ===============================
+  function computeDistancesToExisting(){
+    if(!supplyPts.length){
+      for(const c of candPts){ c.distToExistingM = NaN; }
+      return;
+    }
+    for(const c of candPts){
+      let best = Infinity;
+      for(const s of supplyPts){
+        const d = distMeters(c.lat,c.lng,s.lat,s.lng);
+        if(d < best) best = d;
+      }
+      c.distToExistingM = Number.isFinite(best) ? best : NaN;
+    }
+  }
+
+  // ===============================
+  // 11) SHARED SCORING (NO equity in score)
+  // ===============================
+  function scoreCandidatesShared(){
+    const dN = normalize01(candPts.map(c => c.demandRaw));
+    const eN = normalize01(candPts.map(c => c.equityRaw)); // still compute e01 for evaluation
+    const gN = normalize01(candPts.map(c => c.gapRaw));
+    const constrN = normalize01(candPts.map(c => c.penaltyRaw));
+
+    const R = getServiceRadiusM();
+    const nearArr = candPts.map(c => {
+      const d = num(c.distToExistingM, NaN);
+      if(!Number.isFinite(d)) return 0;
+      return clamp01(1 - (d / R));
+    });
+    const nearN = normalize01(nearArr);
+
+    const w = getWeights();
+
+    for(let i=0;i<candPts.length;i++){
+      const c = candPts[i];
+
+      c.d01 = dN.norm(num(c.demandRaw, 0));
+      c.e01 = eN.norm(num(c.equityRaw, 0)); // evaluation only
+      c.g01 = gN.norm(num(c.gapRaw, 0));
+
+      c.costConstr01 = constrN.norm(num(c.penaltyRaw, 0));
+      c.costNear01   = nearN.norm(nearArr[i]);
+      c.costCluster01 = 0;
+
+      // Benefit without equity
+      c.benefit = w.wd*c.d01 + w.wg*c.g01;
+
+      c.costBase = (w.wp*c.costConstr01 + w.wn*c.costNear01);
+      c.scoreBase = c.benefit - c.costBase;
+      c.score = c.scoreBase;
+    }
+  }
+
+  function violatesSpread(list){
+    const enforceSpread = document.getElementById("ckSpread").checked;
+    if(!enforceSpread) return false;
+    const minSpacingM = Math.max(0, num(document.getElementById("minSpacing").value, 700));
+    if(minSpacingM <= 0) return false;
+
+    for(let i=0;i<list.length;i++){
+      for(let j=i+1;j<list.length;j++){
+        const d = distMeters(list[i].lat,list[i].lng,list[j].lat,list[j].lng);
+        if(d < minSpacingM) return true;
+      }
+    }
+    return false;
+  }
+
+  function applyClusterCosts(selectedList){
+    const w = getWeights();
+    const minSpacingM = Math.max(1, num(document.getElementById("minSpacing").value, 700));
+
+    for(const c of selectedList){
+      let bestD = Infinity;
+      for(const s of selectedList){
+        if(s===c) continue;
+        const d = distMeters(c.lat,c.lng,s.lat,s.lng);
+        if(d < bestD) bestD = d;
+      }
+      c.minDistToSelectedM = Number.isFinite(bestD) ? bestD : NaN;
+      c.costCluster01 = (selectedList.length<=1 || !Number.isFinite(bestD)) ? 0 : clamp01(1 - (bestD / minSpacingM));
+
+      const costFullRaw = c.costBase + w.wc*c.costCluster01;
+      c.cost = clamp01(costFullRaw);
+      c.score = c.benefit - c.cost;
+    }
+  }
+
+  // ===============================
+  // 12) BASELINE (LSOA-driven) SELECTION
+  // ===============================
+  function runBaselineLSOA(P){
+    const selMode = document.getElementById("selMode").value || "rank";
+
+    if(selMode === "greedy"){
+      const pool = candPts.slice().sort((a,b)=> b.scoreBase - a.scoreBase);
+      const picked = [];
+      while(picked.length < P && pool.length){
+        let bestIdx = -1;
+        let bestScore = -Infinity;
+
+        for(let i=0;i<pool.length;i++){
+          const c = pool[i];
+          const trial = picked.concat([c]);
+          if(violatesSpread(trial)) continue;
+
+          const red = redundancyAvgNearestSelected(trial);
+          const obj = (c.scoreBase) + 0.0001*(Number.isFinite(red)? red : 0);
+          if(obj > bestScore){ bestScore = obj; bestIdx = i; }
+        }
+
+        if(bestIdx === -1) break;
+        picked.push(pool.splice(bestIdx,1)[0]);
+      }
+      // repair to ensure size P
+      const repaired = repairSolution(picked, P);
+      applyClusterCosts(repaired);
+      repaired.sort((a,b)=> b.score - a.score);
+      return repaired;
+    }
+
+    const picked = candPts.slice().sort((a,b)=> b.scoreBase - a.scoreBase).slice(0, P);
+    applyClusterCosts(picked);
+    picked.sort((a,b)=> b.score - a.score);
+    return picked;
+  }
+
+  // ===============================
+  // 13) GA (Genetic Algorithm) – with LSOA seeding (warm-start)
+  // ===============================
+  function randInt(n){ return Math.floor(Math.random()*n); }
+
+  function repairSolution(sol, P){
+    const out = [];
+    const used = new Set();
+    for(const x of (sol||[])){
+      if(!x || used.has(x)) continue;
+      const trial = out.concat([x]);
+      if(violatesSpread(trial)) continue;
+      used.add(x);
+      out.push(x);
+      if(out.length >= P) break;
+    }
+    let guard = 0;
+    while(out.length < P && guard++ < 50000){
+      const c = candPts[randInt(candPts.length)];
+      if(used.has(c)) continue;
+      const trial = out.concat([c]);
+      if(violatesSpread(trial)) continue;
+      used.add(c);
+      out.push(c);
+    }
+    return out.slice(0,P);
+  }
+
+  function makeRandomSolution(P){
+    return repairSolution([], P);
+  }
+
+  function crossover(a, b, P){
+    const pool = [];
+    const seen = new Set();
+    for(const x of a){ if(!seen.has(x)){ pool.push(x); seen.add(x);} }
+    for(const x of b){ if(!seen.has(x)){ pool.push(x); seen.add(x);} }
+
+    for(let i=pool.length-1;i>0;i--){
+      const j = randInt(i+1);
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+
+    return repairSolution(pool, P);
+  }
+
+  function mutate(sol, P, mutRate){
+    const out = (sol||[]).slice();
+    for(let i=0;i<out.length;i++){
+      if(Math.random() > mutRate) continue;
+      let guard = 0;
+      while(guard++ < 2000){
+        const candIn = candPts[randInt(candPts.length)];
+        if(out.includes(candIn)) continue;
+        const trial = out.slice();
+        trial[i] = candIn;
+        const repaired = repairSolution(trial, P);
+        if(repaired.length === P){
+          // accept repaired
+          return repaired;
+        }
+      }
+    }
+    return repairSolution(out, P);
+  }
+
+  function objectiveValue(sol){
+    applyClusterCosts(sol);
+
+    const mode = document.getElementById("gaObjective").value || "cov";
+    const cov = computeCoverageDemand(sol).covW; // main objective
+    const meanScore = sol.reduce((a,b)=>a+num(b.score,0),0)/Math.max(1,sol.length);
+
+    const R = getServiceRadiusM();
+    const red = redundancyAvgNearestSelected(sol);
+    const spread01 = Number.isFinite(red) ? clamp01(red / Math.max(1, R)) : 0;
+
+    const meanScore01 = clamp01((meanScore + 1) / 2);
+
+    if(mode === "cov_red") return (0.65*cov + 0.25*meanScore01 + 0.10*spread01);
+    if(mode === "cov")     return (0.75*cov + 0.25*meanScore01);
+    return meanScore;
+  }
+
+  function buildSeededPopulation(P, popSize, seedSol){
+    const seedPct = Math.max(0, Math.min(0.8, num(document.getElementById("gaSeedPct").value, 0.30)));
+    const seedCount = Math.max(0, Math.floor(popSize * seedPct));
+    const pop = [];
+
+    if(seedCount > 0 && seedSol && seedSol.length){
+      const base = repairSolution(seedSol, P);
+      pop.push(base);
+
+      // mutated variants around baseline
+      for(let i=1; i<seedCount; i++){
+        const m = mutate(base, P, Math.min(0.6, Math.max(0.20, num(document.getElementById("gaMut").value, 0.25) + 0.15)));
+        pop.push(m);
+      }
+    }
+
+    while(pop.length < popSize){
+      pop.push(makeRandomSolution(P));
+    }
+    return pop;
+  }
+
+  function runGA(P, seedSol){
+    const popSize = Math.max(10, Math.floor(num(document.getElementById("gaPop").value, 60)));
+    const gens = Math.max(10, Math.floor(num(document.getElementById("gaGen").value, 120)));
+    const mutRate = clamp01(num(document.getElementById("gaMut").value, 0.25));
+    const eliteRate = Math.max(0, Math.min(0.5, num(document.getElementById("gaElite").value, 0.10)));
+
+    const evalSample = Math.max(10, Math.min(popSize, Math.floor(num(document.getElementById("gaEvalSample").value, 30))));
+
+    let pop = buildSeededPopulation(P, popSize, seedSol);
+
+    let bestSol = pop[0];
+    let bestObj = -Infinity;
+
+    function pickEvalSubset(arr){
+      if(arr.length <= evalSample) return arr.map(sol => ({sol}));
+      const out = [];
+      const fixed = Math.min(5, arr.length);
+      for(let i=0;i<fixed;i++) out.push({sol: arr[i]});
+      while(out.length < evalSample){
+        out.push({sol: arr[randInt(arr.length)]});
+      }
+      return out;
+    }
+
+    for(let g=0; g<gens; g++){
+      const subset = pickEvalSubset(pop);
+
+      const scoredSubset = subset.map(x => ({ sol: x.sol, obj: objectiveValue(x.sol) }))
+                                 .sort((a,b)=> b.obj - a.obj);
+
+      if(scoredSubset.length && scoredSubset[0].obj > bestObj){
+        bestObj = scoredSubset[0].obj;
+        bestSol = scoredSubset[0].sol.slice();
+      }
+
+      const scored = scoredSubset.length ? scoredSubset : pop.map(sol => ({sol, obj: objectiveValue(sol)})).sort((a,b)=>b.obj-a.obj);
+
+      const eliteCount = Math.max(1, Math.floor(eliteRate*popSize));
+      const elites = scored.slice(0, Math.min(eliteCount, scored.length)).map(x=>x.sol);
+
+      function pickOne(){
+        const k = 4;
+        let best = null;
+        for(let i=0;i<k;i++){
+          const cand = scored[randInt(scored.length)];
+          if(!best || cand.obj > best.obj) best = cand;
+        }
+        return best.sol;
+      }
+
+      const next = elites.slice();
+
+      while(next.length < popSize){
+        const p1 = scored.length ? pickOne() : pop[randInt(pop.length)];
+        const p2 = scored.length ? pickOne() : pop[randInt(pop.length)];
+        let child = crossover(p1, p2, P);
+        child = mutate(child, P, mutRate);
+        next.push(child);
+      }
+      pop = next;
+    }
+
+    bestSol = repairSolution(bestSol, P);
+    applyClusterCosts(bestSol);
+    bestSol.sort((a,b)=> b.score - a.score);
+    return bestSol;
+  }
+
+  // ===============================
+  // 14) MAP LAYERS UPDATE
+  // ===============================
+  function clearLayer(layer){ layer.forEach(ft => layer.remove(ft)); }
+
+  function setPlanLayer(layer, selectedList, planName){
+    clearLayer(layer);
+    const fc = {
+      type:"FeatureCollection",
+      features: selectedList.map((c,i)=>({
+        type:"Feature",
+        geometry:{ type:"Point", coordinates:[c.lng, c.lat] },
+        properties:{
+          rank:i+1,
+          plan: planName,
+          name:c.name||"",
+          score:c.score,
+          d01:c.d01, e01:c.e01, g01:c.g01,
+          constr:c.costConstr01, near:c.costNear01, cluster:c.costCluster01,
+          lsoa:c.lsoaCode||"",
+          dist_to_existing_m: c.distToExistingM ?? null
+        }
+      }))
+    };
+    layer.addGeoJson(fc);
+  }
+
+  function renderCompareList(){
+    const el = document.getElementById("compareList");
+    const badge = document.getElementById("countBadge");
+    const a = selectedLSOA || [];
+    const b = selectedGA || [];
+    badge.textContent = `${a.length} / ${b.length}`;
+
+    el.innerHTML = "";
+
+    const maxN = Math.max(a.length, b.length);
+    if(maxN === 0){
+      el.innerHTML = '<div class="item"><div class="itemTitle">No shortlist yet</div><div class="muted">Click <b>Run (Both)</b>.</div></div>';
+      return;
+    }
+
+    for(let i=0;i<maxN;i++){
+      const row = document.createElement("div");
+      row.className = "item";
+
+      const left = a[i];
+      const right = b[i];
+
+      const title = document.createElement("div");
+      title.className = "itemTitle";
+      title.textContent = `${i+1}. LSOA: ${left? (left.name||"Candidate") : "—"}   |   GA: ${right? (right.name||"Candidate") : "—"}`;
+
+      const meta = document.createElement("div");
+      meta.className = "itemMeta";
+      meta.innerHTML =
+        `<span class="badge" style="border-color:#ef4444;">LSOA score ${left? left.score.toFixed(3) : "—"}</span>` +
+        `<span class="badge" style="border-color:#7c3aed;">GA score ${right? right.score.toFixed(3) : "—"}</span>` +
+        `<span class="badge">LSOA LSOA ${left? escapeHtml(left.lsoaCode||"n/a") : "—"}</span>` +
+        `<span class="badge">GA LSOA ${right? escapeHtml(right.lsoaCode||"n/a") : "—"}</span>`;
+
+      row.appendChild(title);
+      row.appendChild(meta);
+
+      row.addEventListener("click", ()=> {
+        const c = right || left;
+        if(!c) return;
+        map.panTo({lat:c.lat, lng:c.lng});
+        map.setZoom(Math.max(map.getZoom(), 14));
+      });
+
+      el.appendChild(row);
+    }
+  }
+
+  // ===============================
+  // 15) EXPORTS
+  // ===============================
+  function downloadText(filename, text){
+    const blob = new Blob([text], {type:"text/plain;charset=utf-8"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href=url; a.download=filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=> URL.revokeObjectURL(url), 800);
+  }
+
+  function exportCSV(selectedList, filename){
+    const rows = [["rank","name","lat","lng","score","d01","e01","g01","constr01","near01","cluster01","lsoa","dist_to_existing_m"]];
+    selectedList.forEach((c,i)=>{
+      rows.push([
+        i+1,
+        (c.name||"").replaceAll('"','""'),
+        c.lat, c.lng,
+        (c.score??0).toFixed(6),
+        (c.d01??0).toFixed(6), (c.e01??0).toFixed(6), (c.g01??0).toFixed(6),
+        (c.costConstr01??0).toFixed(6), (c.costNear01??0).toFixed(6), (c.costCluster01??0).toFixed(6),
+        c.lsoaCode||"",
+        Number.isFinite(c.distToExistingM)? Math.round(c.distToExistingM): ""
+      ]);
+    });
+    const csv = rows.map(r => r.map(x => `"${x}"`).join(",")).join("\n");
+    downloadText(filename, csv);
+  }
+
+  function exportGeoJSON(selectedList, filename){
+    const fc = {
+      type:"FeatureCollection",
+      features: selectedList.map((c,i)=>({
+        type:"Feature",
+        geometry:{type:"Point", coordinates:[c.lng,c.lat]},
+        properties:{
+          rank:i+1,
+          name:c.name||"",
+          score:+(c.score??0).toFixed(6),
+          d01:+(c.d01??0).toFixed(6),
+          e01:+(c.e01??0).toFixed(6),
+          g01:+(c.g01??0).toFixed(6),
+          constr01:+(c.costConstr01??0).toFixed(6),
+          near01:+(c.costNear01??0).toFixed(6),
+          cluster01:+(c.costCluster01??0).toFixed(6),
+          lsoa:c.lsoaCode||"",
+          dist_to_existing_m: Number.isFinite(c.distToExistingM)? Math.round(c.distToExistingM): null
+        }
+      }))
+    };
+    downloadText(filename, JSON.stringify(fc, null, 2));
+  }
+
+  // ===============================
+  // 16) RUN BOTH (MAIN)
+  // ===============================
+  function runBoth(){
+    const userP = Math.max(1, Math.floor(num(document.getElementById("pSel").value, 10)));
+    const maxP = Math.max(10, Math.floor(num(document.getElementById("maxP").value, 150)));
+    const P = Math.min(userP, maxP);
+    if(P !== userP){
+      document.getElementById("pSel").value = String(P);
+    }
+
+    const year = String(document.getElementById("yearSel").value || "2030");
+    const target = num(TARGET_BY_YEAR[year], 1500);
+
+    const supplyTotal = computeSupplyTotal();
+    const gap = Math.max(0, target - supplyTotal);
+
+    document.getElementById("k_supply").textContent = String(Math.round(supplyTotal));
+    document.getElementById("k_target").textContent = String(Math.round(target));
+    document.getElementById("k_gap").textContent = String(Math.round(gap));
+    document.getElementById("k_candidates").textContent = String(candPts.length);
+
+    if(!candPts.length){
+      setStatus("No candidates loaded. Check candidates geojson path.");
+      return;
+    }
+
+    computeLSOAGapScores();
+    computeDistancesToExisting();
+    scoreCandidatesShared();
+    computeEquityGroupsFromLSOA(); // NEW: quintiles + candidate group tags
+    updateWeightUI();
+    updateCoverageUI();
+
+    // baseline + GA (GA seeded by baseline)
+    selectedLSOA = runBaselineLSOA(P);
+    selectedGA = runGA(P, selectedLSOA);
+
+    setPlanLayer(lsoaPlanLayer, selectedLSOA, "LSOA");
+    setPlanLayer(gaPlanLayer, selectedGA, "GA");
+
+    lsoaPlanLayer.setMap(document.getElementById("ckLSOAPlan").checked ? map : null);
+    gaPlanLayer.setMap(document.getElementById("ckGAPlan").checked ? map : null);
+
+    const covA = computeCoverageDemand(selectedLSOA);
+    const covB = computeCoverageDemand(selectedGA);
+
+    const savgA = selectedLSOA.reduce((a,b)=>a+num(b.score,0),0)/Math.max(1,selectedLSOA.length);
+    const savgB = selectedGA.reduce((a,b)=>a+num(b.score,0),0)/Math.max(1,selectedGA.length);
+
+    const dexA = avgDistToExisting(selectedLSOA);
+    const dexB = avgDistToExisting(selectedGA);
+
+    const redA = redundancyAvgNearestSelected(selectedLSOA);
+    const redB = redundancyAvgNearestSelected(selectedGA);
+
+    // NEW: equity evaluation (post-hoc)
+    const eqCovA = computeEquityWeightedCoverage(selectedLSOA);
+    const eqCovB = computeEquityWeightedCoverage(selectedGA);
+
+    const eqDispA = computeEquityDisparityQ5Q1(selectedLSOA);
+    const eqDispB = computeEquityDisparityQ5Q1(selectedGA);
+
+    document.getElementById("k_cov_lsoa").textContent = (covA.covW*100).toFixed(0) + "%";
+    document.getElementById("k_cov_ga").textContent   = (covB.covW*100).toFixed(0) + "%";
+    document.getElementById("k_savg_lsoa").textContent = Number.isFinite(savgA) ? savgA.toFixed(3) : "–";
+    document.getElementById("k_savg_ga").textContent   = Number.isFinite(savgB) ? savgB.toFixed(3) : "–";
+    document.getElementById("k_dexist_lsoa").textContent = Number.isFinite(dexA) ? String(Math.round(dexA)) : "–";
+    document.getElementById("k_dexist_ga").textContent   = Number.isFinite(dexB) ? String(Math.round(dexB)) : "–";
+    document.getElementById("k_red_lsoa").textContent = Number.isFinite(redA) ? String(Math.round(redA)) : "–";
+    document.getElementById("k_red_ga").textContent   = Number.isFinite(redB) ? String(Math.round(redB)) : "–";
+
+    document.getElementById("k_eqcov_lsoa").textContent = (eqCovA*100).toFixed(0) + "%";
+    document.getElementById("k_eqcov_ga").textContent   = (eqCovB*100).toFixed(0) + "%";
+
+    document.getElementById("k_eqgap_lsoa").textContent = Number.isFinite(eqDispA.diff) ? ((eqDispA.diff*100).toFixed(1) + " pp") : "–";
+    document.getElementById("k_eqgap_ga").textContent   = Number.isFinite(eqDispB.diff) ? ((eqDispB.diff*100).toFixed(1) + " pp") : "–";
+
+    document.getElementById("btnExportCsvLSOA").disabled = selectedLSOA.length===0;
+    document.getElementById("btnExportGeoLSOA").disabled = selectedLSOA.length===0;
+    document.getElementById("btnExportCsvGA").disabled = selectedGA.length===0;
+    document.getElementById("btnExportGeoGA").disabled = selectedGA.length===0;
+
+    renderCompareList();
+
+    const covMode = getCoverageMode();
+    const covLine = (covMode === "time")
+      ? `Coverage mode=time (T=${getTimeThresholdMin()}min, detour=${getDetourK().toFixed(2)}, speed=${getSpeedKmh()}km/h, sampleN=${getCoverageSampleN()})`
+      : `Coverage mode=distance (D=${(getServiceRadiusM()/1000).toFixed(1)}km, sampleN=${getCoverageSampleN()})`;
+
+    const eqLine =
+      `Equity eval: dir=${getEquityDir()}, eqCov(LSOA)=${(eqCovA*100).toFixed(0)}%, eqCov(GA)=${(eqCovB*100).toFixed(0)}%, ` +
+      `disp(Q5-Q1) LSOA=${Number.isFinite(eqDispA.diff)? (eqDispA.diff*100).toFixed(1) : "–"}pp, GA=${Number.isFinite(eqDispB.diff)? (eqDispB.diff*100).toFixed(1) : "–"}pp`;
+
+    setStatus(
+      "Done (Both).\n" +
+      `Year=${year}, target=${Math.round(target)}, supply=${Math.round(supplyTotal)}, gap=${Math.round(gap)}\n` +
+      `Candidates=${candPts.length}, P=${P} (maxP=${maxP})\n` +
+      covLine + "\n" +
+      `LSOA coverage=${(covA.covW*100).toFixed(0)}%, GA coverage=${(covB.covW*100).toFixed(0)}%\n` +
+      eqLine + "\n" +
+      "Tip: Compare tab shows the two shortlists. Equity metrics are post-hoc (not in score)."
+    );
+  }
+
+  // ===============================
+  // 17) MAP INIT
+  // ===============================
+  async function initMap(){
+    map = new google.maps.Map(document.getElementById("map"), {
+      center:{lat:51.4816,lng:-3.1791},
+      zoom:12,
+      mapTypeControl:false, streetViewControl:false, fullscreenControl:true
+    });
+    info = new google.maps.InfoWindow();
+
+    supplyLayer   = new google.maps.Data({map});
+    lsoaLayer     = new google.maps.Data({map});
+    candLayer     = new google.maps.Data({map});
+    lsoaPlanLayer = new google.maps.Data({map});
+    gaPlanLayer   = new google.maps.Data({map});
+
+    supplyLayer.setStyle(ft => {
+      const hov = !!ft.getProperty("_hover");
+      return { icon: iconCircle("#2563eb", hov ? 10 : 8, hov ? 5 : 4), zIndex: 800 };
+    });
+    candLayer.setStyle(ft => {
+      const hov = !!ft.getProperty("_hover");
+      return { icon: iconCircle("#f59e0b", hov ? 7 : 6, hov ? 3 : 2), zIndex: 700 };
+    });
+    lsoaPlanLayer.setStyle(ft => {
+      const hov = !!ft.getProperty("_hover");
+      return { icon: iconStar("#ef4444", hov ? 1.35 : 1.15), zIndex: 9999 };
+    });
+    gaPlanLayer.setStyle(ft => {
+      const hov = !!ft.getProperty("_hover");
+      return { icon: iconDiamond("#7c3aed", hov ? 1.25 : 1.05), zIndex: 9998 };
+    });
+
+    function addHover(layer){
+      layer.addListener("mouseover", e => e.feature.setProperty("_hover", true));
+      layer.addListener("mouseout",  e => e.feature.setProperty("_hover", false));
+      layer.addListener("click", e => {
+        const lat = e.feature.getGeometry().get().lat();
+        const lng = e.feature.getGeometry().get().lng();
+        info.setContent(
+          "<b>Selected site</b><br/>" +
+          "rank: " + escapeHtml(String(e.feature.getProperty("rank")||"")) + "<br/>" +
+          "plan: " + escapeHtml(String(e.feature.getProperty("plan")||"")) + "<br/>" +
+          "score(no equity): " + escapeHtml(String(e.feature.getProperty("score")||"")) + "<br/>" +
+          "e01(eval only): " + escapeHtml(String(e.feature.getProperty("e01")||"")) + "<br/>" +
+          "lsoa: " + escapeHtml(String(e.feature.getProperty("lsoa")||""))
+        );
+        info.setPosition({lat, lng});
+        info.open({map});
+      });
+    }
+    addHover(supplyLayer);
+    addHover(candLayer);
+    addHover(lsoaPlanLayer);
+    addHover(gaPlanLayer);
+
+    styleLSOA();
+    updateWeightUI();
+    updateCoverageUI();
+
+    document.getElementById("ckSupply").addEventListener("change", e => supplyLayer.setMap(e.target.checked? map:null));
+    document.getElementById("ckLSOA").addEventListener("change", e => lsoaLayer.setMap(e.target.checked? map:null));
+    document.getElementById("ckCandidates").addEventListener("change", e => candLayer.setMap(e.target.checked? map:null));
+
+    document.getElementById("ckLSOAPlan").addEventListener("change", e => lsoaPlanLayer.setMap(e.target.checked? map:null));
+    document.getElementById("ckGAPlan").addEventListener("change", e => gaPlanLayer.setMap(e.target.checked? map:null));
+
+    document.getElementById("tabKpi").addEventListener("click", ()=> setTab("kpi"));
+    document.getElementById("tabGap").addEventListener("click", ()=> setTab("gap"));
+    document.getElementById("tabCompare").addEventListener("click", ()=> setTab("compare"));
+
+    document.getElementById("btnRun").addEventListener("click", ()=> {
+      hasRun = true;
+      runBoth();
+    });
+
+    document.getElementById("btnPrint").addEventListener("click", ()=> window.print());
+
+    document.getElementById("btnExportCsvLSOA").addEventListener("click", ()=> exportCSV(selectedLSOA, "planner_lsoa.csv"));
+    document.getElementById("btnExportGeoLSOA").addEventListener("click", ()=> exportGeoJSON(selectedLSOA, "planner_lsoa.geojson"));
+    document.getElementById("btnExportCsvGA").addEventListener("click", ()=> exportCSV(selectedGA, "planner_ga.csv"));
+    document.getElementById("btnExportGeoGA").addEventListener("click", ()=> exportGeoJSON(selectedGA, "planner_ga.geojson"));
+
+    function maybeRerun(){
+      updateWeightUI();
+      updateCoverageUI();
+      if(AUTO_RERUN_AFTER_FIRST_RUN && hasRun && candPts.length) runBoth();
+    }
+    function hook(id, evt){
+      const el = document.getElementById(id);
+      if(!el) return;
+      el.addEventListener(evt, maybeRerun);
+    }
+
+    ["wDemand","wGap","wPenalty","wNear","wCluster"].forEach(id => hook(id, "input"));
+    [
+      "covMode","svcKm","svcMin","detourK","speedKmh",
+      "minSpacing","ckSpread","selMode",
+      "equityDir",
+      "gaPop","gaGen","gaMut","gaElite","gaSeedPct","gaObjective",
+      "covSampleN","gaEvalSample","maxP",
+      "yearSel","pSel"
+    ].forEach(id => hook(id, "change"));
+
+    try{
+      setStatus("Loading GeoJSON…");
+
+      const [supply, lsoa, candidates] = await Promise.all([
+        loadGeoJSON(DATA_URLS.supply),
+        loadGeoJSON(DATA_URLS.lsoa),
+        loadGeoJSON(DATA_URLS.candidates)
+      ]);
+
+      supplyLayer.addGeoJson(supply);
+      lsoaLayer.addGeoJson(lsoa);
+      candLayer.addGeoJson(candidates);
+
+      lsoaIndex = (lsoa.features||[]).map(f => {
+        const props = f.properties || {};
+        const code = getProp(props, FIELD.code, "LSOA");
+
+        const pop  = num(getProp(props, FIELD.pop, null), NaN);
+        const demandRaw = Number.isFinite(pop) ? pop : num(getProp(props, FIELD.demand, 1), 1);
+
+        const medAge = num(getProp(props, FIELD.median_age, null), NaN);
+        const equityRaw = computeEquityFromProps(props, medAge);
+
+        const penaltyRaw = computePenaltyFromProps(props);
+        const polygons = makePolygonsFromGeometry(f.geometry);
+
+        return {
+          code, pop, medianAge: medAge,
+          demandRaw, equityRaw, penaltyRaw,
+          polygons,
+          feature: null,
+          supplyRaw: 0,
+          gap01: 0,
+          equity01: 0,
+          need01: 0,
+          equityGroup: 3
+        };
+      });
+
+      lsoaByCodeMap = new Map(lsoaIndex.map(r => [r.code, r]));
+
+      const lsoaByCode = new Map(lsoaIndex.map(r => [r.code, r]));
+      lsoaLayer.forEach(ft => {
+        const propsLike = {
+          LSOA21CD: ft.getProperty("LSOA21CD"),
+          lsoa21cd: ft.getProperty("lsoa21cd"),
+          LSOA11CD: ft.getProperty("LSOA11CD"),
+          lsoa11cd: ft.getProperty("lsoa11cd"),
+          code: ft.getProperty("code"),
+          id: ft.getProperty("id"),
+        };
+        const code = getProp(propsLike, FIELD.code, null);
+        if(code && lsoaByCode.has(code)){
+          const rec = lsoaByCode.get(code);
+          rec.feature = ft;
+          ft.setProperty("code", rec.code);
+        }
+      });
+
+      supplyPts = [];
+      for(const f of (supply.features||[])){
+        if(!f.geometry || f.geometry.type!=="Point") continue;
+        const coords = f.geometry.coordinates || [];
+        const lng = coords[0], lat = coords[1];
+        if(typeof lat!=="number" || typeof lng!=="number") continue;
+        if(looksLike27700(lng, lat)) continue;
+        const props = f.properties || {};
+        const sockets = num(getProp(props, FIELD.sockets, 0), 0);
+        supplyPts.push({lat, lng, sockets: (sockets || 1)});
+      }
+
+      candPts = [];
+      for(const f of (candidates.features||[])){
+        if(!f.geometry || f.geometry.type!=="Point") continue;
+        const coords = f.geometry.coordinates || [];
+        const lng = coords[0], lat = coords[1];
+        if(typeof lat!=="number" || typeof lng!=="number") continue;
+        if(looksLike27700(lng, lat)) continue;
+
+        const props = f.properties || {};
+        const name = getProp(props, ["name","id","site","label","LSOA21NM","LSOA11NM"], "Candidate");
+
+        const ll = new google.maps.LatLng(lat, lng);
+        const rec = joinPointToLSOA(ll);
+
+        candPts.push({
+          lat, lng, name,
+          lsoaCode: rec ? rec.code : "",
+          demandRaw: rec ? num(rec.demandRaw, 1) : 1,
+          equityRaw: rec ? num(rec.equityRaw, 0) : 0,
+          penaltyRaw: rec ? num(rec.penaltyRaw, 0) : 0,
+          gapRaw: 0,
+
+          distToExistingM: NaN,
+          d01:0, e01:0, g01:0,
+          need01:0,
+          equityGroup:3,
+          benefit:0, costBase:0, cost:0,
+          costConstr01:0, costNear01:0, costCluster01:0,
+          scoreBase:0, score:0
+        });
+      }
+
+      computeLSOAGapScores();
+      styleLSOA();
+
+      const year = String(document.getElementById("yearSel").value || "2030");
+      const supplyTotal = computeSupplyTotal();
+      document.getElementById("k_supply").textContent = String(Math.round(supplyTotal));
+      document.getElementById("k_target").textContent = String(Math.round(num(TARGET_BY_YEAR[year], 1500)));
+      document.getElementById("k_gap").textContent = "–";
+      document.getElementById("k_candidates").textContent = String(candPts.length);
+
+      document.getElementById("btnExportCsvLSOA").disabled = true;
+      document.getElementById("btnExportGeoLSOA").disabled = true;
+      document.getElementById("btnExportCsvGA").disabled = true;
+      document.getElementById("btnExportGeoGA").disabled = true;
+
+      map.fitBounds(CARDIFF_BOUNDS);
+
+      setStatus(
+        "Loaded.\n" +
+        "Supply points: " + supplyPts.length + "\n" +
+        "LSOA polygons: " + (lsoa.features||[]).length + "\n" +
+        "Candidates: " + candPts.length + "\n\n" +
+        "Click \"Run (Both)\" to generate the two plans.\n" +
+        "Scoring excludes equity; equity is evaluated post-hoc.\n" +
+        "GA is warm-started with the LSOA baseline (seeding)."
+      );
+
+    } catch(err){
+      console.error(err);
+      setStatus("FAILED.\n" + String(err));
+      alert(String(err));
+    }
+  }
+
+  window.initMap = initMap;
+
+  (function loadGoogleMaps(){
+    const s = document.createElement("script");
+    s.src = "https://maps.googleapis.com/maps/api/js?key=" + encodeURIComponent(GMAPS_KEY) +
+            "&callback=initMap&v=weekly&libraries=geometry&loading=async";
+    s.async = true; s.defer = true;
+    document.head.appendChild(s);
+  })();
+</script>
+</body>
+</html>
