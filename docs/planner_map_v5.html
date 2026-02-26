@@ -966,23 +966,32 @@
   function renderComparisonTable(tbodyId, entries, kpiDefs){
     const tbody = document.getElementById(tbodyId);
     tbody.innerHTML = "";
+    const EPS = 1e-6;
+
     for(const kpi of kpiDefs){
       const tr = document.createElement("tr");
       tr.innerHTML = `<td style="font-weight:700;">${kpi.name}</td>`;
 
       const vals = entries.map(e => e.metrics ? e.metrics[kpi.key] : NaN);
+      const finite = vals.filter(Number.isFinite);
 
-      // find best index
-      let bestIdx = -1, bestVal = kpi.higherIsBetter ? -Infinity : Infinity;
-      for(let i=0;i<vals.length;i++){
-        if(!Number.isFinite(vals[i])) continue;
-        if(kpi.higherIsBetter ? (vals[i]>bestVal) : (vals[i]<bestVal)){ bestVal=vals[i]; bestIdx=i; }
+      // Check if all values are essentially equal
+      const allEqual = finite.length > 0 && finite.every(v => Math.abs(v - finite[0]) < EPS);
+
+      // Find best index (only if not all equal)
+      let bestIdx = -1;
+      if(!allEqual && finite.length > 0){
+        let bestVal = kpi.higherIsBetter ? -Infinity : Infinity;
+        for(let i=0;i<vals.length;i++){
+          if(!Number.isFinite(vals[i])) continue;
+          if(kpi.higherIsBetter ? (vals[i]>bestVal+EPS) : (vals[i]<bestVal-EPS)){ bestVal=vals[i]; bestIdx=i; }
+        }
       }
 
       for(let i=0;i<entries.length;i++){
         const td = document.createElement("td");
         td.textContent = kpi.fmt(vals[i]);
-        if(i===bestIdx && Number.isFinite(vals[i])) td.className = "win";
+        if(i===bestIdx && bestIdx>=0) td.className = "win";
         tr.appendChild(td);
       }
       tbody.appendChild(tr);
@@ -1046,28 +1055,48 @@
     if(state==="active"){box.classList.add("active");num.classList.add("active");}
     else if(state==="done"){box.classList.add("done");num.classList.add("done");}
   }
-  function setWinnerTag(id, label){
+  function setWinnerTag(id, label, isTie){
     const el=document.getElementById(id);
     el.style.display="inline-flex";
-    el.innerHTML=`<span class="winnerTag">★ Best: ${escapeHtml(label)}</span>`;
+    if(isTie){
+      el.innerHTML=`<span class="winnerTag" style="background:#2563eb;">≡ Tie → ${escapeHtml(label)}</span>`;
+    } else {
+      el.innerHTML=`<span class="winnerTag">★ Best: ${escapeHtml(label)}</span>`;
+    }
   }
 
-  // Compare two metric objects for "overall winner" (majority of KPIs)
+  // Compare metric objects for "overall winner" (majority of KPIs)
+  // Returns {bestIdx, isTie, scores}
   function pickBestFromMetrics(entriesArr){
-    // entriesArr: [{label, metrics}]
     const scores = entriesArr.map(()=>0);
+    const EPS = 1e-6; // tolerance for "equal"
+
     for(const kpi of KPI_DEFS){
+      const vals = entriesArr.map(e => e.metrics ? e.metrics[kpi.key] : NaN);
+      const finite = vals.filter(Number.isFinite);
+      if(!finite.length) continue;
+
+      // Check if all finite values are essentially equal
+      const allEqual = finite.every(v => Math.abs(v - finite[0]) < EPS);
+      if(allEqual) continue; // skip tied KPIs — no one wins
+
       let bestIdx=-1, bestVal=kpi.higherIsBetter?-Infinity:Infinity;
-      for(let i=0;i<entriesArr.length;i++){
-        const v=entriesArr[i].metrics?entriesArr[i].metrics[kpi.key]:NaN;
-        if(!Number.isFinite(v))continue;
-        if(kpi.higherIsBetter?(v>bestVal):(v<bestVal)){bestVal=v;bestIdx=i;}
+      for(let i=0;i<vals.length;i++){
+        if(!Number.isFinite(vals[i]))continue;
+        if(kpi.higherIsBetter?(vals[i]>bestVal+EPS):(vals[i]<bestVal-EPS)){bestVal=vals[i];bestIdx=i;}
       }
       if(bestIdx>=0) scores[bestIdx]++;
     }
-    let best=0;
-    for(let i=1;i<scores.length;i++) if(scores[i]>scores[best]) best=i;
-    return best;
+
+    const maxScore = Math.max(...scores);
+    const winners = scores.reduce((acc,s,i) => s===maxScore ? acc.concat(i) : acc, []);
+    const isTie = (maxScore === 0) || (winners.length > 1);
+
+    // On a tie, prefer the last entry (more sophisticated method)
+    // Stage 1: Greedy+Spacing is last; Stage 2: Lex is last; Stage 3: Hybrid is last
+    const bestIdx = isTie ? (entriesArr.length - 1) : winners[0];
+
+    return { bestIdx, isTie, scores };
   }
 
   // STAGE 1
@@ -1086,12 +1115,12 @@
     renderComparisonTable("stage1Body", entries, KPI_DEFS);
     document.getElementById("stage1Results").style.display="block";
 
-    const best=pickBestFromMetrics(entries);
-    bestLSOAMode = best===0?"rank":"greedy";
-    setWinnerTag("stage1Winner", entries[best].label);
+    const {bestIdx, isTie} = pickBestFromMetrics(entries);
+    bestLSOAMode = bestIdx===0?"rank":"greedy";
+    setWinnerTag("stage1Winner", entries[bestIdx].label, isTie);
 
     // Show best LSOA on map
-    finalPlanLSOA = best===0 ? results.lsoaRank : results.lsoaGreedy;
+    finalPlanLSOA = bestIdx===0 ? results.lsoaRank : results.lsoaGreedy;
     setPlanLayer(lsoaPlanLayer, finalPlanLSOA, "LSOA");
 
     setStageState(1,"done");
@@ -1099,7 +1128,7 @@
 
     const elapsed=((performance.now()-t0)/1000).toFixed(1);
     document.getElementById("stage1Time").textContent=`${elapsed}s`;
-    setStatus(`Stage 1 done (${elapsed}s). Best LSOA: ${entries[best].label}. Proceed to Stage 2.`);
+    setStatus(`Stage 1 done (${elapsed}s). Best LSOA: ${entries[bestIdx].label}${isTie?" (tie — prefer spacing)":""}. Proceed to Stage 2.`);
   }
 
   // STAGE 2
@@ -1128,12 +1157,12 @@
       renderComparisonTable("stage2Body", entries, KPI_DEFS);
       document.getElementById("stage2Results").style.display="block";
 
-      const best=pickBestFromMetrics(entries);
-      bestGAMode = ["score","covScore","lex"][best];
-      setWinnerTag("stage2Winner", entries[best].label);
+      const {bestIdx, isTie} = pickBestFromMetrics(entries);
+      bestGAMode = ["score","covScore","lex"][bestIdx];
+      setWinnerTag("stage2Winner", entries[bestIdx].label, isTie);
 
       // Show best GA on map
-      finalPlanGA = [results.gaScore,results.gaCovScore,results.gaLex][best];
+      finalPlanGA = [results.gaScore,results.gaCovScore,results.gaLex][bestIdx];
       setPlanLayer(gaPlanLayer, finalPlanGA, "GA");
 
       setStageState(2,"done");
@@ -1141,7 +1170,7 @@
 
       // Update Stage 3 description
       const lsoaLabel = bestLSOAMode==="rank"?"Rank":"Greedy+Spacing";
-      const gaLabel = entries[best].label;
+      const gaLabel = entries[bestIdx].label;
       document.getElementById("stage3Desc").innerHTML =
         `Seed: <b>LSOA ${lsoaLabel}</b> → Refine: <b>GA ${gaLabel}</b>`;
       document.getElementById("stage3ColA").textContent = `LSOA ${lsoaLabel}`;
@@ -1181,8 +1210,8 @@
       renderComparisonTable("stage3Body", entries, KPI_DEFS);
       document.getElementById("stage3Results").style.display="block";
 
-      const best=pickBestFromMetrics(entries);
-      setWinnerTag("stage3Winner", entries[best].label);
+      const {bestIdx: best3, isTie: tie3} = pickBestFromMetrics(entries);
+      setWinnerTag("stage3Winner", entries[best3].label, tie3);
 
       // Update map: LSOA layer = seed, GA layer = hybrid
       setPlanLayer(lsoaPlanLayer, seedSol, "LSOA (seed)");
