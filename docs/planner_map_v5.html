@@ -246,6 +246,11 @@
         <div class="badge" style="font-weight:900;">GA tuning</div>
       </div>
       <div class="row">
+        <label class="small" style="min-width:150px;">Repeat runs N</label>
+        <input id="gaRuns" class="input" style="width:80px" type="number" min="1" max="20" step="1" value="5"/>
+        <span class="muted">Each GA mode runs N times; report median ± σ</span>
+      </div>
+      <div class="row">
         <label class="small" style="min-width:150px;">Population</label>
         <input id="gaPop" class="input" style="width:80px" type="number" min="10" step="10" value="120"/>
         <label class="small" style="min-width:100px;">Generations</label>
@@ -329,7 +334,7 @@
           Stage 2 — GA Alone (3 modes)
           <span id="stage2Winner" style="display:none;"></span>
         </div>
-        <div class="muted">Compare Score-only vs Coverage→Score vs Lexicographic. Random init (no LSOA seed).</div>
+        <div class="muted">Compare Score-only vs Coverage→Score vs Lexicographic. Random init (no LSOA seed). Each mode runs N times; median KPIs used for comparison.</div>
 
         <div class="row">
           <button id="btnStage2" class="btn" disabled>Run Stage 2</button>
@@ -337,9 +342,10 @@
         </div>
 
         <div id="stage2Results" style="display:none;">
+          <div class="muted" id="stage2RunInfo" style="margin-bottom:6px;"></div>
           <table class="tbl">
             <thead>
-              <tr><th>KPI</th><th>Score</th><th>Cov→Score</th><th>Lex</th></tr>
+              <tr><th>KPI (median ± σ)</th><th>Score</th><th>Cov→Score</th><th>Lex</th></tr>
             </thead>
             <tbody id="stage2Body"></tbody>
           </table>
@@ -356,7 +362,7 @@
           <span id="stage3Winner" style="display:none;"></span>
         </div>
         <div class="muted" id="stage3Desc">
-          Uses the best LSOA mode as seed, refined by the best GA mode.
+          Uses the best LSOA mode as seed, refined by the best GA mode. Hybrid also runs N times.
         </div>
 
         <div class="row">
@@ -365,9 +371,10 @@
         </div>
 
         <div id="stage3Results" style="display:none;">
+          <div class="muted" id="stage3RunInfo" style="margin-bottom:6px;"></div>
           <table class="tbl">
             <thead>
-              <tr><th>KPI</th><th id="stage3ColA">Best LSOA</th><th id="stage3ColB">Best GA (alone)</th><th>Hybrid (final)</th></tr>
+              <tr><th>KPI (median ± σ)</th><th id="stage3ColA">Best LSOA</th><th id="stage3ColB">Best GA (alone)</th><th>Hybrid (final)</th></tr>
             </thead>
             <tbody id="stage3Body"></tbody>
           </table>
@@ -379,7 +386,7 @@
   <!-- ====== FINAL COMPARE PANEL ====== -->
   <div id="comparePanel" style="display:none;">
     <div class="section">
-      <div style="font-weight:900; margin-bottom:6px;">Final comparison (all methods)</div>
+      <div style="font-weight:900; margin-bottom:6px;">Final comparison (all methods — GA/Hybrid show median of N runs)</div>
       <table class="tbl">
         <thead>
           <tr><th>KPI</th><th>LSOA Rank</th><th>LSOA Greedy</th><th>GA Score</th><th>GA Cov→Score</th><th>GA Lex</th><th>Hybrid</th></tr>
@@ -822,6 +829,54 @@
     return {q1,q5,diff:(Number.isFinite(q1)&&Number.isFinite(q5))?(q5-q1):NaN};
   }
 
+  // ---- NEW: Continuous (non-saturating) KPIs ----
+
+  // Demand-weighted average access distance (meters)
+  // Unlike binary coverage, this ALWAYS differentiates — lower is better
+  function computeDemandWeightedAvgDist(sel, demandPoints){
+    if(!sel.length || !demandPoints.length) return NaN;
+    let totalW=0, distWSum=0;
+    for(const c of demandPoints){
+      const w = Math.max(0, num(c.demandRaw, 1));
+      totalW += w;
+      // best distance to any facility (existing + new)
+      const exSq = Number.isFinite(c.distToExistingSq) ? c.distToExistingSq : Infinity;
+      let bestSq = exSq;
+      for(const s of sel){ const dSq=distSqFast(c,s); if(dSq<bestSq) bestSq=dSq; }
+      distWSum += w * Math.sqrt(bestSq);
+    }
+    return totalW > 0 ? distWSum / totalW : NaN;
+  }
+
+  // Max distance to nearest facility (worst-case access) — lower is better
+  function computeMaxAccessDist(sel, demandPoints){
+    if(!sel.length || !demandPoints.length) return NaN;
+    let maxDist = 0;
+    for(const c of demandPoints){
+      const exSq = Number.isFinite(c.distToExistingSq) ? c.distToExistingSq : Infinity;
+      let bestSq = exSq;
+      for(const s of sel){ const dSq=distSqFast(c,s); if(dSq<bestSq) bestSq=dSq; }
+      const d = Math.sqrt(bestSq);
+      if(d > maxDist) maxDist = d;
+    }
+    return maxDist;
+  }
+
+  // Demand-weighted p90 access distance (90th percentile) — lower is better
+  function computeP90AccessDist(sel, demandPoints){
+    if(!sel.length || !demandPoints.length) return NaN;
+    const dists = [];
+    for(const c of demandPoints){
+      const exSq = Number.isFinite(c.distToExistingSq) ? c.distToExistingSq : Infinity;
+      let bestSq = exSq;
+      for(const s of sel){ const dSq=distSqFast(c,s); if(dSq<bestSq) bestSq=dSq; }
+      dists.push(Math.sqrt(bestSq));
+    }
+    dists.sort((a,b)=>a-b);
+    const idx = Math.min(dists.length-1, Math.floor(0.90 * dists.length));
+    return dists[idx];
+  }
+
   // Full metrics for a solution
   function computeFullMetrics(sel, demandPoints, cache){
     if(!sel || !sel.length) return null;
@@ -831,9 +886,124 @@
     const red = redundancyAvgNearestSelected(sel);
     const eqCov = computeEquityWeightedCoverage(sel, demandPoints);
     const eqDisp = computeEquityDisparityQ5Q1(sel, demandPoints);
-    return { cov: m.covAfter01, wsMin: m.minImprove, wsAvg: m.avgImprove, avgScore, dex, red, eqCov, eqDisp: eqDisp.diff };
+    const dwAvgDist = computeDemandWeightedAvgDist(sel, demandPoints);
+    const maxAccess = computeMaxAccessDist(sel, demandPoints);
+    const p90Access = computeP90AccessDist(sel, demandPoints);
+    return {
+      cov: m.covAfter01, wsMin: m.minImprove, wsAvg: m.avgImprove,
+      avgScore, dex, red, eqCov, eqDisp: eqDisp.diff,
+      dwAvgDist, maxAccess, p90Access
+    };
   }
 
+  // ===============================
+  // 6b) MULTI-RUN GA INFRASTRUCTURE
+  // ===============================
+  function getGARuns(){ return Math.max(1, Math.min(20, Math.floor(num(document.getElementById("gaRuns").value, 5)))); }
+
+  // Run GA N times, return { allMetrics[], bestRun:{sol,metrics}, medianMetrics, stdMetrics }
+  function runGAMultiple(P, seedSol, demandPoints, cache, mode, N){
+    const allSolutions = [];
+    const allMetrics = [];
+
+    for(let r=0; r<N; r++){
+      const sol = runGA(P, seedSol, demandPoints, cache, mode);
+      const m = computeFullMetrics(sol, demandPoints, cache);
+      allSolutions.push(sol);
+      allMetrics.push(m);
+    }
+
+    // Find the best single run by majority-of-KPIs
+    const entries = allMetrics.map((m,i) => ({label:String(i), metrics:m}));
+    const {bestIdx} = pickBestFromMetrics(entries);
+
+    // Compute median and std for each KPI key
+    const medianMetrics = {};
+    const stdMetrics = {};
+    for(const kpi of KPI_DEFS){
+      const vals = allMetrics.map(m => m ? m[kpi.key] : NaN).filter(Number.isFinite);
+      medianMetrics[kpi.key] = computeMedian(vals);
+      stdMetrics[kpi.key] = computeStd(vals);
+    }
+
+    return {
+      allMetrics,
+      bestRun: { sol: allSolutions[bestIdx], metrics: allMetrics[bestIdx] },
+      medianMetrics,
+      stdMetrics,
+      N
+    };
+  }
+
+  function computeMedian(arr){
+    if(!arr.length) return NaN;
+    const sorted = arr.slice().sort((a,b)=>a-b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 === 0 ? (sorted[mid-1]+sorted[mid])/2 : sorted[mid];
+  }
+  function computeStd(arr){
+    if(arr.length < 2) return 0;
+    const mean = arr.reduce((a,b)=>a+b,0)/arr.length;
+    const sqDiffs = arr.map(v => (v-mean)*(v-mean));
+    return Math.sqrt(sqDiffs.reduce((a,b)=>a+b,0)/(arr.length-1));
+  }
+
+  // Format σ values appropriately for each KPI type
+  function fmtSigma(kpi, sigma){
+    if(!Number.isFinite(sigma) || sigma < 1e-6) return null;
+    // Match the scale of the main formatter
+    if(kpi.fmt === fmtPct) return (sigma*100).toFixed(1);      // σ of 0.003 → "0.3"
+    if(kpi.fmt === fmtPP)  return (sigma*100).toFixed(1);      // σ of 0.012 → "1.2"
+    if(kpi.fmt === fmtInt) return String(Math.round(sigma));   // σ of 42.3 → "42"
+    // default: match the main format's decimal places
+    return sigma.toFixed(3);
+  }
+
+  // Render comparison table that supports both single-run and multi-run entries
+  // Each entry: { label, metrics, stdMetrics? (if multi-run) }
+  function renderComparisonTableV2(tbodyId, entries, kpiDefs){
+    const tbody = document.getElementById(tbodyId);
+    tbody.innerHTML = "";
+    const EPS = 1e-6;
+
+    for(const kpi of kpiDefs){
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td style="font-weight:700;">${kpi.name}</td>`;
+
+      const vals = entries.map(e => e.metrics ? e.metrics[kpi.key] : NaN);
+      const finite = vals.filter(Number.isFinite);
+      const allEqual = finite.length > 0 && finite.every(v => Math.abs(v - finite[0]) < EPS);
+
+      let bestIdx = -1;
+      if(!allEqual && finite.length > 0){
+        let bestVal = kpi.higherIsBetter ? -Infinity : Infinity;
+        for(let i=0;i<vals.length;i++){
+          if(!Number.isFinite(vals[i])) continue;
+          if(kpi.higherIsBetter ? (vals[i]>bestVal+EPS) : (vals[i]<bestVal-EPS)){ bestVal=vals[i]; bestIdx=i; }
+        }
+      }
+
+      for(let i=0;i<entries.length;i++){
+        const td = document.createElement("td");
+        const mainText = kpi.fmt(vals[i]);
+
+        if(entries[i].stdMetrics){
+          const sigmaStr = fmtSigma(kpi, entries[i].stdMetrics[kpi.key]);
+          if(sigmaStr){
+            td.innerHTML = `${escapeHtml(mainText)} <span style="color:#9ca3af;font-size:10px;">±${sigmaStr}</span>`;
+          } else {
+            td.textContent = mainText;
+          }
+        } else {
+          td.textContent = mainText;
+        }
+
+        if(i===bestIdx && bestIdx>=0) td.className = "win";
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+  }
   // ===============================
   // 7) LSOA BASELINE
   // ===============================
@@ -963,50 +1133,19 @@
 
   // Given an array of {label, metrics}, render a comparison table body
   // kpiDefs: [{name, key, fmt, higherIsBetter}]
-  function renderComparisonTable(tbodyId, entries, kpiDefs){
-    const tbody = document.getElementById(tbodyId);
-    tbody.innerHTML = "";
-    const EPS = 1e-6;
-
-    for(const kpi of kpiDefs){
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td style="font-weight:700;">${kpi.name}</td>`;
-
-      const vals = entries.map(e => e.metrics ? e.metrics[kpi.key] : NaN);
-      const finite = vals.filter(Number.isFinite);
-
-      // Check if all values are essentially equal
-      const allEqual = finite.length > 0 && finite.every(v => Math.abs(v - finite[0]) < EPS);
-
-      // Find best index (only if not all equal)
-      let bestIdx = -1;
-      if(!allEqual && finite.length > 0){
-        let bestVal = kpi.higherIsBetter ? -Infinity : Infinity;
-        for(let i=0;i<vals.length;i++){
-          if(!Number.isFinite(vals[i])) continue;
-          if(kpi.higherIsBetter ? (vals[i]>bestVal+EPS) : (vals[i]<bestVal-EPS)){ bestVal=vals[i]; bestIdx=i; }
-        }
-      }
-
-      for(let i=0;i<entries.length;i++){
-        const td = document.createElement("td");
-        td.textContent = kpi.fmt(vals[i]);
-        if(i===bestIdx && bestIdx>=0) td.className = "win";
-        tr.appendChild(td);
-      }
-      tbody.appendChild(tr);
-    }
-  }
 
   const KPI_DEFS = [
-    { name:"Coverage",                key:"cov",     fmt:fmtPct, higherIsBetter:true },
-    { name:"Worst-served min improve", key:"wsMin",   fmt:fmtPP,  higherIsBetter:true },
-    { name:"Worst-served avg improve", key:"wsAvg",   fmt:fmtPP,  higherIsBetter:true },
-    { name:"Avg score",               key:"avgScore", fmt:v=>fmtNum(v,3), higherIsBetter:true },
-    { name:"Avg dist to existing (m)", key:"dex",    fmt:fmtInt, higherIsBetter:true },
-    { name:"Redundancy (avg nearest m)", key:"red",  fmt:fmtInt, higherIsBetter:true },
-    { name:"Equity-weighted coverage", key:"eqCov",   fmt:fmtPct, higherIsBetter:true },
-    { name:"Equity disparity (Q5−Q1)", key:"eqDisp",  fmt:fmtPP,  higherIsBetter:false },
+    { name:"Coverage",                key:"cov",       fmt:fmtPct, higherIsBetter:true },
+    { name:"Worst-served min improve", key:"wsMin",    fmt:fmtPP,  higherIsBetter:true },
+    { name:"Worst-served avg improve", key:"wsAvg",    fmt:fmtPP,  higherIsBetter:true },
+    { name:"Avg score",               key:"avgScore",  fmt:v=>fmtNum(v,3), higherIsBetter:true },
+    { name:"Avg dist to existing (m)", key:"dex",      fmt:fmtInt, higherIsBetter:true },
+    { name:"Redundancy (avg nearest m)", key:"red",    fmt:fmtInt, higherIsBetter:true },
+    { name:"Equity-weighted coverage", key:"eqCov",    fmt:fmtPct, higherIsBetter:true },
+    { name:"Equity disparity (Q5−Q1)", key:"eqDisp",   fmt:fmtPP,  higherIsBetter:false },
+    { name:"Demand-wtd avg access (m)", key:"dwAvgDist", fmt:fmtInt, higherIsBetter:false },
+    { name:"P90 access distance (m)",  key:"p90Access",  fmt:fmtInt, higherIsBetter:false },
+    { name:"Max access distance (m)",  key:"maxAccess",  fmt:fmtInt, higherIsBetter:false },
   ];
 
   // ===============================
@@ -1112,7 +1251,7 @@
     metrics.lsoaGreedy = computeFullMetrics(results.lsoaGreedy, ctx.demandPoints, ctx.ws);
 
     const entries=[{label:"Rank",metrics:metrics.lsoaRank},{label:"Greedy+Spacing",metrics:metrics.lsoaGreedy}];
-    renderComparisonTable("stage1Body", entries, KPI_DEFS);
+    renderComparisonTableV2("stage1Body", entries, KPI_DEFS);
     document.getElementById("stage1Results").style.display="block";
 
     const {bestIdx, isTie} = pickBestFromMetrics(entries);
@@ -1134,34 +1273,45 @@
   // STAGE 2
   function runStage2(){
     const ctx=commonPrecompute(); if(!ctx)return;
-    setStageState(2,"active"); setStatus("Running Stage 2 — GA Score vs CovScore vs Lex… (may take a few seconds)");
+    const N = getGARuns();
+    setStageState(2,"active"); setStatus(`Running Stage 2 — 3 GA modes × ${N} runs each… (may take a while)`);
 
     // Use setTimeout so UI updates before heavy computation
     setTimeout(()=>{
       const t0=performance.now();
 
-      // GA alone = random init (no seed)
-      results.gaScore = runGA(ctx.P, null, ctx.demandPoints, ctx.ws, "score");
-      results.gaCovScore = runGA(ctx.P, null, ctx.demandPoints, ctx.ws, "covScore");
-      results.gaLex = runGA(ctx.P, null, ctx.demandPoints, ctx.ws, "lex");
+      // GA alone = random init (no seed) — run each mode N times
+      const multiScore    = runGAMultiple(ctx.P, null, ctx.demandPoints, ctx.ws, "score", N);
+      const multiCovScore = runGAMultiple(ctx.P, null, ctx.demandPoints, ctx.ws, "covScore", N);
+      const multiLex      = runGAMultiple(ctx.P, null, ctx.demandPoints, ctx.ws, "lex", N);
 
-      metrics.gaScore = computeFullMetrics(results.gaScore, ctx.demandPoints, ctx.ws);
-      metrics.gaCovScore = computeFullMetrics(results.gaCovScore, ctx.demandPoints, ctx.ws);
-      metrics.gaLex = computeFullMetrics(results.gaLex, ctx.demandPoints, ctx.ws);
+      // Store best single run for map display and Stage 3 seeding
+      results.gaScore    = multiScore.bestRun.sol;
+      results.gaCovScore = multiCovScore.bestRun.sol;
+      results.gaLex      = multiLex.bestRun.sol;
+
+      // Store median metrics for comparison (this is what we compare on)
+      metrics.gaScore    = multiScore.medianMetrics;
+      metrics.gaCovScore = multiCovScore.medianMetrics;
+      metrics.gaLex      = multiLex.medianMetrics;
+
+      // Also store multi-run data for Stage 3 reference and final compare
+      results._multiGA = { score: multiScore, covScore: multiCovScore, lex: multiLex };
 
       const entries=[
-        {label:"Score",metrics:metrics.gaScore},
-        {label:"Cov→Score",metrics:metrics.gaCovScore},
-        {label:"Lex",metrics:metrics.gaLex}
+        {label:"Score",     metrics:multiScore.medianMetrics,    stdMetrics:multiScore.stdMetrics},
+        {label:"Cov→Score", metrics:multiCovScore.medianMetrics, stdMetrics:multiCovScore.stdMetrics},
+        {label:"Lex",       metrics:multiLex.medianMetrics,      stdMetrics:multiLex.stdMetrics}
       ];
-      renderComparisonTable("stage2Body", entries, KPI_DEFS);
+      renderComparisonTableV2("stage2Body", entries, KPI_DEFS);
       document.getElementById("stage2Results").style.display="block";
+      document.getElementById("stage2RunInfo").textContent = `${N} runs per mode (${N*3} total GA runs)`;
 
       const {bestIdx, isTie} = pickBestFromMetrics(entries);
       bestGAMode = ["score","covScore","lex"][bestIdx];
       setWinnerTag("stage2Winner", entries[bestIdx].label, isTie);
 
-      // Show best GA on map
+      // Show best GA run on map
       finalPlanGA = [results.gaScore,results.gaCovScore,results.gaLex][bestIdx];
       setPlanLayer(gaPlanLayer, finalPlanGA, "GA");
 
@@ -1172,48 +1322,56 @@
       const lsoaLabel = bestLSOAMode==="rank"?"Rank":"Greedy+Spacing";
       const gaLabel = entries[bestIdx].label;
       document.getElementById("stage3Desc").innerHTML =
-        `Seed: <b>LSOA ${lsoaLabel}</b> → Refine: <b>GA ${gaLabel}</b>`;
+        `Seed: <b>LSOA ${lsoaLabel}</b> → Refine: <b>GA ${gaLabel}</b>. Hybrid also runs N times.`;
       document.getElementById("stage3ColA").textContent = `LSOA ${lsoaLabel}`;
-      document.getElementById("stage3ColB").textContent = `GA ${gaLabel} (alone)`;
+      document.getElementById("stage3ColB").textContent = `GA ${gaLabel} (median)`;
 
       const elapsed=((performance.now()-t0)/1000).toFixed(1);
       document.getElementById("stage2Time").textContent=`${elapsed}s`;
-      setStatus(`Stage 2 done (${elapsed}s). Best GA mode: ${gaLabel}. Proceed to Stage 3 (Hybrid).`);
+      setStatus(`Stage 2 done (${elapsed}s, ${N}×3 runs). Best GA mode: ${gaLabel}${isTie?" (tie)":""}. Proceed to Stage 3.`);
     }, 50);
   }
 
   // STAGE 3
   function runStage3(){
     const ctx=commonPrecompute(); if(!ctx)return;
+    const N = getGARuns();
     setStageState(3,"active");
-    setStatus("Running Stage 3 — Hybrid (best LSOA seed → best GA mode)…");
+    setStatus(`Running Stage 3 — Hybrid (best LSOA seed → best GA mode) × ${N} runs…`);
 
     setTimeout(()=>{
       const t0=performance.now();
 
-      // Seed = best LSOA
+      // Seed = best LSOA (deterministic, no need for multi-run)
       const seedSol = bestLSOAMode==="rank" ? results.lsoaRank : results.lsoaGreedy;
       const seedMetrics = bestLSOAMode==="rank" ? metrics.lsoaRank : metrics.lsoaGreedy;
 
-      // Best GA alone metrics
-      const bestGAMetrics = {score:metrics.gaScore, covScore:metrics.gaCovScore, lex:metrics.gaLex}[bestGAMode];
+      // Best GA alone median metrics (from Stage 2 multi-run)
+      const bestGAMedian = {score:metrics.gaScore, covScore:metrics.gaCovScore, lex:metrics.gaLex}[bestGAMode];
+      const bestGAStd = results._multiGA ?
+        {score:results._multiGA.score.stdMetrics, covScore:results._multiGA.covScore.stdMetrics, lex:results._multiGA.lex.stdMetrics}[bestGAMode] : null;
 
-      // Run hybrid
-      results.hybrid = runGA(ctx.P, seedSol, ctx.demandPoints, ctx.ws, bestGAMode);
-      metrics.hybrid = computeFullMetrics(results.hybrid, ctx.demandPoints, ctx.ws);
+      // Run hybrid N times
+      const multiHybrid = runGAMultiple(ctx.P, seedSol, ctx.demandPoints, ctx.ws, bestGAMode, N);
+
+      // Store results
+      results.hybrid = multiHybrid.bestRun.sol;
+      metrics.hybrid = multiHybrid.medianMetrics;
+      results._multiHybrid = multiHybrid;
 
       const entries = [
         {label:"Best LSOA", metrics:seedMetrics},
-        {label:"Best GA (alone)", metrics:bestGAMetrics},
-        {label:"Hybrid", metrics:metrics.hybrid}
+        {label:"Best GA (median)", metrics:bestGAMedian, stdMetrics:bestGAStd},
+        {label:"Hybrid (median)", metrics:multiHybrid.medianMetrics, stdMetrics:multiHybrid.stdMetrics}
       ];
-      renderComparisonTable("stage3Body", entries, KPI_DEFS);
+      renderComparisonTableV2("stage3Body", entries, KPI_DEFS);
       document.getElementById("stage3Results").style.display="block";
+      document.getElementById("stage3RunInfo").textContent = `Hybrid: ${N} runs; GA (alone) median from Stage 2`;
 
       const {bestIdx: best3, isTie: tie3} = pickBestFromMetrics(entries);
       setWinnerTag("stage3Winner", entries[best3].label, tie3);
 
-      // Update map: LSOA layer = seed, GA layer = hybrid
+      // Update map: LSOA layer = seed, GA layer = best hybrid run
       setPlanLayer(lsoaPlanLayer, seedSol, "LSOA (seed)");
       finalPlanGA = results.hybrid;
       setPlanLayer(gaPlanLayer, results.hybrid, "Hybrid");
@@ -1232,20 +1390,23 @@
 
       const elapsed=((performance.now()-t0)/1000).toFixed(1);
       document.getElementById("stage3Time").textContent=`${elapsed}s`;
-      setStatus(`All 3 stages complete (${elapsed}s). Hybrid plan on map. Switch to "Final compare" tab for full overview.`);
+      setStatus(`All 3 stages complete (${elapsed}s). Hybrid: ${N} runs. Switch to "Final compare" for full overview.`);
     }, 50);
   }
 
   function renderFinalCompare(ctx){
+    const gaStd = results._multiGA || {};
+    const hybStd = results._multiHybrid || {};
+
     const entries = [
-      {label:"LSOA Rank", metrics:metrics.lsoaRank},
-      {label:"LSOA Greedy", metrics:metrics.lsoaGreedy},
-      {label:"GA Score", metrics:metrics.gaScore},
-      {label:"GA Cov→Score", metrics:metrics.gaCovScore},
-      {label:"GA Lex", metrics:metrics.gaLex},
-      {label:"Hybrid", metrics:metrics.hybrid}
+      {label:"LSOA Rank",    metrics:metrics.lsoaRank},
+      {label:"LSOA Greedy",  metrics:metrics.lsoaGreedy},
+      {label:"GA Score",     metrics:metrics.gaScore,    stdMetrics: gaStd.score ? gaStd.score.stdMetrics : null},
+      {label:"GA Cov→Score", metrics:metrics.gaCovScore, stdMetrics: gaStd.covScore ? gaStd.covScore.stdMetrics : null},
+      {label:"GA Lex",       metrics:metrics.gaLex,      stdMetrics: gaStd.lex ? gaStd.lex.stdMetrics : null},
+      {label:"Hybrid",       metrics:metrics.hybrid,     stdMetrics: hybStd.stdMetrics || null}
     ];
-    renderComparisonTable("finalBody", entries, KPI_DEFS);
+    renderComparisonTableV2("finalBody", entries, KPI_DEFS);
   }
 
   function renderHybridList(){
