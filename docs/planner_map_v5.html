@@ -105,6 +105,45 @@
     .tbl th, .tbl td{ padding:6px 8px; text-align:left; border-bottom:1px solid #eee; }
     .tbl th{ color:#6b7280; font-weight:700; background:#f9fafb; }
     .tbl td.win{ background:#ecfdf5; font-weight:900; color:#059669; }
+
+    /* Editing toolbar */
+    .editBar{
+      display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+      padding:10px 12px; border:2px solid #e5e7eb; border-radius:12px;
+      background:#fafbfc; margin-top:8px;
+    }
+    .editBar.active-add{ border-color:#10b981; background:#ecfdf5; }
+    .editBar.active-exclude{ border-color:#ef4444; background:#fef2f2; }
+    .editBar.active-lock{ border-color:#f59e0b; background:#fffbeb; }
+
+    .modeBtn{
+      padding:6px 10px; border-radius:8px; border:1.5px solid #d1d5db;
+      background:#fff; font-size:12px; font-weight:700; cursor:pointer;
+      display:inline-flex; align-items:center; gap:4px;
+    }
+    .modeBtn:hover{ background:#f3f4f6; }
+    .modeBtn.sel-navigate{ border-color:#2563eb; background:#eff6ff; color:#2563eb; }
+    .modeBtn.sel-add{ border-color:#10b981; background:#ecfdf5; color:#059669; }
+    .modeBtn.sel-exclude{ border-color:#ef4444; background:#fef2f2; color:#dc2626; }
+    .modeBtn.sel-lock{ border-color:#f59e0b; background:#fffbeb; color:#d97706; }
+
+    .editCount{
+      display:inline-flex; align-items:center; gap:4px;
+      padding:3px 8px; border-radius:999px;
+      font-size:11px; font-weight:700; border:1px solid #e5e7eb; background:#fff;
+    }
+    .editCount.excluded{ border-color:#fca5a5; color:#dc2626; }
+    .editCount.locked{ border-color:#fcd34d; color:#d97706; }
+    .editCount.custom{ border-color:#6ee7b7; color:#059669; }
+
+    /* Map cursor modes */
+    .cursor-add #map { cursor: crosshair !important; }
+    .cursor-exclude #map { cursor: not-allowed !important; }
+    .cursor-lock #map { cursor: cell !important; }
+
+    .editLog{ max-height:120px; overflow:auto; margin-top:6px; font-size:11px; color:#6b7280; border:1px solid #eee; border-radius:8px; padding:6px 8px; background:#fff; }
+    .editLog div{ padding:2px 0; border-bottom:1px solid #f9fafb; }
+    .editLog div:last-child{ border-bottom:none; }
   </style>
 </head>
 
@@ -154,6 +193,23 @@
       <button id="btnExportFinal" class="btn secondary" disabled>Export final (CSV)</button>
       <button id="btnExportFinalGeo" class="btn secondary" disabled>Export final (GeoJSON)</button>
     </div>
+
+    <!-- Scenario editing toolbar -->
+    <div class="editBar" id="editBar">
+      <span style="font-weight:900; font-size:12px;">Scenario editing</span>
+      <button class="modeBtn sel-navigate" id="modeNavigate" onclick="setEditMode('navigate')">🖱 Navigate</button>
+      <button class="modeBtn" id="modeAdd" onclick="setEditMode('add')">＋ Add site</button>
+      <button class="modeBtn" id="modeExclude" onclick="setEditMode('exclude')">✕ Exclude</button>
+      <button class="modeBtn" id="modeLock" onclick="setEditMode('lock')">🔒 Lock</button>
+      <button class="modeBtn" id="btnResetEdits" onclick="resetEdits()" style="margin-left:auto;">↺ Reset all</button>
+    </div>
+    <div class="row" style="margin-top:4px;">
+      <span class="editCount custom" id="countCustom">+0 added</span>
+      <span class="editCount excluded" id="countExcluded">0 excluded</span>
+      <span class="editCount locked" id="countLocked">0 locked</span>
+      <span class="muted" id="editModeHint">Navigate mode — click map to view info.</span>
+    </div>
+    <div class="editLog" id="editLog" style="display:none;"></div>
 
     <details style="margin-top:8px;">
       <summary class="small">Advanced options</summary>
@@ -405,6 +461,9 @@
     <b>Legend</b><br/>
     <div><span class="swatch" style="background:#2563eb;"></span>Blue: existing chargers</div>
     <div><span class="swatch" style="background:#f59e0b;"></span>Orange: candidates</div>
+    <div><span class="swatch" style="background:#10b981;"></span>Green: custom added sites</div>
+    <div><span class="swatch" style="background:#d1d5db;"></span>Grey: excluded candidates</div>
+    <div><span class="swatch" style="background:#f59e0b; border:2px solid #d97706;"></span>Gold (larger): locked candidates</div>
     <div><span class="swatch" style="background:#ef4444;"></span>Red star: LSOA plan (best mode)</div>
     <div><span class="swatch" style="background:#7c3aed;"></span>Purple diamond: GA/Hybrid plan (final)</div>
     <div class="muted" style="margin-top:6px;">Gap map colors LSOA by high demand + low provision.</div>
@@ -459,9 +518,17 @@
   let lsoaIndex = [];
   let lsoaByCodeMap = new Map();
   let supplyPts = [];
-  let candPts = [];
+  let candPts = [];       // all candidates (original + custom)
+  let candPtsOriginal = []; // snapshot of loaded candidates (for reset)
 
   let activeTab = "stages";
+
+  // Editing state
+  let editMode = "navigate";  // "navigate" | "add" | "exclude" | "lock"
+  let excludedSet = new Set(); // candidate objects to exclude from optimization
+  let lockedSet = new Set();   // candidate objects to force-include in every solution
+  let customCount = 0;         // counter for naming custom candidates
+  let editLogEntries = [];     // edit history
 
   // Results store for all 6 methods
   let results = {
@@ -731,7 +798,14 @@
   }
   function repairSolution(sol,P){
     const out=[],used=new Set();
-    for(const x of (sol||[])){if(!x||used.has(x))continue;const t=out.concat([x]);if(violatesSpread(t))continue;used.add(x);out.push(x);if(out.length>=P)break;}
+    // Force-include locked candidates first (that are in active candPts)
+    for(const lk of lockedSet){
+      if(used.has(lk) || !candPts.includes(lk)) continue;
+      out.push(lk); used.add(lk);
+      if(out.length>=P) return out.slice(0,P);
+    }
+    // Then add from proposed solution
+    for(const x of (sol||[])){if(!x||used.has(x)||!candPts.includes(x))continue;const t=out.concat([x]);if(violatesSpread(t))continue;used.add(x);out.push(x);if(out.length>=P)break;}
     let guard=0;while(out.length<P&&guard++<50000){const c=candPts[Math.floor(Math.random()*candPts.length)];if(used.has(c))continue;const t=out.concat([c]);if(violatesSpread(t))continue;used.add(c);out.push(c);}
     return out.slice(0,P);
   }
@@ -1005,20 +1079,220 @@
     }
   }
   // ===============================
+  // 6c) SCENARIO EDITING
+  // ===============================
+  function setEditMode(mode){
+    editMode = mode;
+    const bar = document.getElementById("editBar");
+    bar.classList.remove("active-add","active-exclude","active-lock");
+
+    document.getElementById("modeNavigate").className = "modeBtn" + (mode==="navigate"?" sel-navigate":"");
+    document.getElementById("modeAdd").className = "modeBtn" + (mode==="add"?" sel-add":"");
+    document.getElementById("modeExclude").className = "modeBtn" + (mode==="exclude"?" sel-exclude":"");
+    document.getElementById("modeLock").className = "modeBtn" + (mode==="lock"?" sel-lock":"");
+
+    document.body.classList.remove("cursor-add","cursor-exclude","cursor-lock");
+
+    const hints = {
+      navigate: "Navigate mode — click map to view info.",
+      add: "Add mode — click map to place a new candidate site.",
+      exclude: "Exclude mode — click a candidate (orange dot) to exclude/restore it.",
+      lock: "Lock mode — click a candidate to force-include/unlock it in all plans."
+    };
+    document.getElementById("editModeHint").textContent = hints[mode] || "";
+
+    if(mode==="add"){ bar.classList.add("active-add"); document.body.classList.add("cursor-add"); }
+    else if(mode==="exclude"){ bar.classList.add("active-exclude"); document.body.classList.add("cursor-exclude"); }
+    else if(mode==="lock"){ bar.classList.add("active-lock"); document.body.classList.add("cursor-lock"); }
+  }
+
+  function updateEditCounts(){
+    const active = candPts.filter(c => !excludedSet.has(c));
+    const customs = candPts.filter(c => c._custom);
+    document.getElementById("countCustom").textContent = `+${customs.length} added`;
+    document.getElementById("countExcluded").textContent = `${excludedSet.size} excluded`;
+    document.getElementById("countLocked").textContent = `${lockedSet.size} locked`;
+    document.getElementById("k_candidates").textContent = String(active.length);
+  }
+
+  function addEditLog(msg){
+    editLogEntries.push(msg);
+    const el = document.getElementById("editLog");
+    el.style.display = "block";
+    // keep last 20
+    if(editLogEntries.length > 20) editLogEntries = editLogEntries.slice(-20);
+    el.innerHTML = editLogEntries.map(m => `<div>${escapeHtml(m)}</div>`).join("");
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function findNearestCandidate(lat, lng, maxDistM){
+    const click = attachRad({lat, lng});
+    let best = null, bestD = Infinity;
+    for(const c of candPts){
+      const d = distFast(click, c);
+      if(d < bestD){ bestD = d; best = c; }
+    }
+    return (best && bestD <= maxDistM) ? { cand: best, distM: bestD } : null;
+  }
+
+  function addCustomCandidate(lat, lng){
+    const ll = new google.maps.LatLng(lat, lng);
+    const rec = joinPointToLSOA(ll);
+    customCount++;
+    const c = attachRad({
+      lat, lng,
+      name: `Custom-${customCount}`,
+      _custom: true,
+      lsoaCode: rec ? rec.code : "",
+      demandRaw: rec ? num(rec.demandRaw, 1) : 1,
+      equityRaw: rec ? num(rec.equityRaw, 0) : 0,
+      penaltyRaw: rec ? num(rec.penaltyRaw, 0) : 0,
+      gapRaw: 0,
+      distToExistingM: NaN, distToExistingSq: Infinity,
+      d01:0, e01:0, g01:0, benefit:0, costBase:0, cost:0,
+      costConstr01:0, costNear01:0, costCluster01:0, scoreBase:0, score:0
+    });
+    candPts.push(c);
+
+    // Add to map layer
+    const fc = { type:"FeatureCollection", features:[{
+      type:"Feature",
+      geometry:{ type:"Point", coordinates:[lng, lat] },
+      properties:{ name: c.name, _custom:true, _idx: candPts.length-1 }
+    }]};
+    candLayer.addGeoJson(fc);
+
+    addEditLog(`+ Added ${c.name} at (${lat.toFixed(4)}, ${lng.toFixed(4)}) in LSOA ${c.lsoaCode||"none"}`);
+    updateEditCounts();
+    refreshCandLayerStyle();
+  }
+
+  function toggleExclude(cand){
+    if(!cand) return;
+    if(excludedSet.has(cand)){
+      excludedSet.delete(cand);
+      lockedSet.delete(cand); // can't be locked if excluded
+      addEditLog(`↩ Restored ${cand.name||"candidate"} (LSOA: ${cand.lsoaCode||"?"})`);
+    } else {
+      excludedSet.add(cand);
+      lockedSet.delete(cand);
+      addEditLog(`✕ Excluded ${cand.name||"candidate"} (LSOA: ${cand.lsoaCode||"?"})`);
+    }
+    updateEditCounts();
+    refreshCandLayerStyle();
+  }
+
+  function toggleLock(cand){
+    if(!cand) return;
+    if(excludedSet.has(cand)){
+      // Un-exclude first, then lock
+      excludedSet.delete(cand);
+    }
+    if(lockedSet.has(cand)){
+      lockedSet.delete(cand);
+      addEditLog(`🔓 Unlocked ${cand.name||"candidate"} (LSOA: ${cand.lsoaCode||"?"})`);
+    } else {
+      lockedSet.add(cand);
+      addEditLog(`🔒 Locked ${cand.name||"candidate"} — will be force-included (LSOA: ${cand.lsoaCode||"?"})`);
+    }
+    updateEditCounts();
+    refreshCandLayerStyle();
+  }
+
+  function resetEdits(){
+    excludedSet.clear();
+    lockedSet.clear();
+    // Remove custom candidates
+    const origLen = candPts.filter(c => !c._custom).length;
+    candPts = candPts.filter(c => !c._custom);
+    customCount = 0;
+    editLogEntries = [];
+    document.getElementById("editLog").style.display = "none";
+    document.getElementById("editLog").innerHTML = "";
+
+    // Rebuild candidate layer from scratch
+    clearLayer(candLayer);
+    const fc = { type:"FeatureCollection", features: candPts.map((c,i) => ({
+      type:"Feature",
+      geometry:{ type:"Point", coordinates:[c.lng, c.lat] },
+      properties:{ name: c.name||"", _idx: i }
+    }))};
+    candLayer.addGeoJson(fc);
+
+    updateEditCounts();
+    refreshCandLayerStyle();
+    setEditMode("navigate");
+    addEditLog("↺ All edits reset.");
+  }
+
+  function refreshCandLayerStyle(){
+    if(!candLayer) return;
+    candLayer.setStyle(ft => {
+      const idx = ft.getProperty("_idx");
+      const hov = !!ft.getProperty("_hover");
+      const c = (idx !== undefined && idx < candPts.length) ? candPts[idx] : null;
+      const isCustom = ft.getProperty("_custom") || (c && c._custom);
+      const isExcluded = c && excludedSet.has(c);
+      const isLocked = c && lockedSet.has(c);
+
+      if(isExcluded){
+        return { icon: iconCircle("#d1d5db", hov?6:5, 1), zIndex:600 }; // grey
+      }
+      if(isLocked){
+        return { icon: iconCircle("#f59e0b", hov?9:8, hov?4:3), zIndex:750 }; // gold, larger
+      }
+      if(isCustom){
+        return { icon: iconCircle("#10b981", hov?8:7, hov?4:3), zIndex:720 }; // green
+      }
+      return { icon: iconCircle("#f59e0b", hov?7:6, hov?3:2), zIndex:700 }; // default orange
+    });
+  }
+
+  // Get candidate index from map click proximity
+  function findCandIdxNearClick(lat, lng){
+    const clickP = attachRad({lat, lng});
+    const z = map ? map.getZoom() : 12;
+    const threshold = Math.max(30, Math.min(500, 40 * Math.pow(2, 14 - z)));
+    let bestIdx = -1, bestD = Infinity;
+    for(let i=0; i<candPts.length; i++){
+      const d = distFast(clickP, candPts[i]);
+      if(d < bestD){ bestD = d; bestIdx = i; }
+    }
+    return (bestIdx >= 0 && bestD <= threshold) ? bestIdx : -1;
+  }
+
+  // Run optimization with only active (non-excluded) candidates
+  // Temporarily swaps candPts, runs fn, restores
+  function withActiveCandidates(fn){
+    const saved = candPts;
+    candPts = saved.filter(c => !excludedSet.has(c));
+    try { return fn(); }
+    finally { candPts = saved; }
+  }
+
+  // ===============================
   // 7) LSOA BASELINE
   // ===============================
   function runBaselineLSOA(P, mode){
+    // Locked candidates are always included first
+    const lockedActive = [...lockedSet].filter(c => candPts.includes(c));
+
     if(mode === "greedy"){
-      const pool=candPts.slice().sort((a,b)=>b.scoreBase-a.scoreBase); const picked=[];
-      while(picked.length<P&&pool.length){
+      const pool=candPts.slice().sort((a,b)=>b.scoreBase-a.scoreBase);
+      const picked=[...lockedActive]; const usedSet=new Set(picked);
+      // Remove locked from pool
+      const remaining = pool.filter(c => !usedSet.has(c));
+      while(picked.length<P&&remaining.length){
         let bestIdx=-1,bestScore=-Infinity;
-        for(let i=0;i<pool.length;i++){const c=pool[i];const trial=picked.concat([c]);if(violatesSpread(trial))continue;if(c.scoreBase>bestScore){bestScore=c.scoreBase;bestIdx=i;}}
-        if(bestIdx===-1)break; picked.push(pool.splice(bestIdx,1)[0]);
+        for(let i=0;i<remaining.length;i++){const c=remaining[i];const trial=picked.concat([c]);if(violatesSpread(trial))continue;if(c.scoreBase>bestScore){bestScore=c.scoreBase;bestIdx=i;}}
+        if(bestIdx===-1)break; picked.push(remaining.splice(bestIdx,1)[0]);
       }
       const rep=repairSolution(picked,P); applyClusterCosts(rep); rep.sort((a,b)=>b.score-a.score); return rep;
     }
-    // rank mode
-    const picked=candPts.slice().sort((a,b)=>b.scoreBase-a.scoreBase).slice(0,P);
+    // rank mode — locked first, then fill by score
+    const usedSet = new Set(lockedActive);
+    const rest = candPts.slice().sort((a,b)=>b.scoreBase-a.scoreBase).filter(c=>!usedSet.has(c));
+    const picked = [...lockedActive, ...rest].slice(0,P);
     applyClusterCosts(picked); picked.sort((a,b)=>b.score-a.score); return picked;
   }
 
@@ -1240,6 +1514,7 @@
 
   // STAGE 1
   function runStage1(){
+    withActiveCandidates(()=>{
     const ctx=commonPrecompute(); if(!ctx)return;
     setStageState(1,"active"); setStatus("Running Stage 1 — LSOA Rank vs Greedy…");
     const t0=performance.now();
@@ -1267,35 +1542,36 @@
 
     const elapsed=((performance.now()-t0)/1000).toFixed(1);
     document.getElementById("stage1Time").textContent=`${elapsed}s`;
-    setStatus(`Stage 1 done (${elapsed}s). Best LSOA: ${entries[bestIdx].label}${isTie?" (tie — prefer spacing)":""}. Proceed to Stage 2.`);
+    const lockInfo = lockedSet.size ? ` (${lockedSet.size} locked)` : "";
+    const exclInfo = excludedSet.size ? ` (${excludedSet.size} excluded)` : "";
+    setStatus(`Stage 1 done (${elapsed}s). Best LSOA: ${entries[bestIdx].label}${isTie?" (tie — prefer spacing)":""}${lockInfo}${exclInfo}. Proceed to Stage 2.`);
+    }); // end withActiveCandidates
   }
 
   // STAGE 2
   function runStage2(){
-    const ctx=commonPrecompute(); if(!ctx)return;
     const N = getGARuns();
     setStageState(2,"active"); setStatus(`Running Stage 2 — 3 GA modes × ${N} runs each… (may take a while)`);
 
-    // Use setTimeout so UI updates before heavy computation
     setTimeout(()=>{
+      const saved = candPts;
+      candPts = saved.filter(c => !excludedSet.has(c));
+      try {
+      const ctx=commonPrecompute(); if(!ctx){ candPts=saved; return; }
       const t0=performance.now();
 
-      // GA alone = random init (no seed) — run each mode N times
       const multiScore    = runGAMultiple(ctx.P, null, ctx.demandPoints, ctx.ws, "score", N);
       const multiCovScore = runGAMultiple(ctx.P, null, ctx.demandPoints, ctx.ws, "covScore", N);
       const multiLex      = runGAMultiple(ctx.P, null, ctx.demandPoints, ctx.ws, "lex", N);
 
-      // Store best single run for map display and Stage 3 seeding
       results.gaScore    = multiScore.bestRun.sol;
       results.gaCovScore = multiCovScore.bestRun.sol;
       results.gaLex      = multiLex.bestRun.sol;
 
-      // Store median metrics for comparison (this is what we compare on)
       metrics.gaScore    = multiScore.medianMetrics;
       metrics.gaCovScore = multiCovScore.medianMetrics;
       metrics.gaLex      = multiLex.medianMetrics;
 
-      // Also store multi-run data for Stage 3 reference and final compare
       results._multiGA = { score: multiScore, covScore: multiCovScore, lex: multiLex };
 
       const entries=[
@@ -1311,14 +1587,12 @@
       bestGAMode = ["score","covScore","lex"][bestIdx];
       setWinnerTag("stage2Winner", entries[bestIdx].label, isTie);
 
-      // Show best GA run on map
       finalPlanGA = [results.gaScore,results.gaCovScore,results.gaLex][bestIdx];
       setPlanLayer(gaPlanLayer, finalPlanGA, "GA");
 
       setStageState(2,"done");
       document.getElementById("btnStage3").disabled=false;
 
-      // Update Stage 3 description
       const lsoaLabel = bestLSOAMode==="rank"?"Rank":"Greedy+Spacing";
       const gaLabel = entries[bestIdx].label;
       document.getElementById("stage3Desc").innerHTML =
@@ -1329,32 +1603,32 @@
       const elapsed=((performance.now()-t0)/1000).toFixed(1);
       document.getElementById("stage2Time").textContent=`${elapsed}s`;
       setStatus(`Stage 2 done (${elapsed}s, ${N}×3 runs). Best GA mode: ${gaLabel}${isTie?" (tie)":""}. Proceed to Stage 3.`);
+      } finally { candPts = saved; }
     }, 50);
   }
 
   // STAGE 3
   function runStage3(){
-    const ctx=commonPrecompute(); if(!ctx)return;
     const N = getGARuns();
     setStageState(3,"active");
     setStatus(`Running Stage 3 — Hybrid (best LSOA seed → best GA mode) × ${N} runs…`);
 
     setTimeout(()=>{
+      const saved = candPts;
+      candPts = saved.filter(c => !excludedSet.has(c));
+      try {
+      const ctx=commonPrecompute(); if(!ctx){ candPts=saved; return; }
       const t0=performance.now();
 
-      // Seed = best LSOA (deterministic, no need for multi-run)
       const seedSol = bestLSOAMode==="rank" ? results.lsoaRank : results.lsoaGreedy;
       const seedMetrics = bestLSOAMode==="rank" ? metrics.lsoaRank : metrics.lsoaGreedy;
 
-      // Best GA alone median metrics (from Stage 2 multi-run)
       const bestGAMedian = {score:metrics.gaScore, covScore:metrics.gaCovScore, lex:metrics.gaLex}[bestGAMode];
       const bestGAStd = results._multiGA ?
         {score:results._multiGA.score.stdMetrics, covScore:results._multiGA.covScore.stdMetrics, lex:results._multiGA.lex.stdMetrics}[bestGAMode] : null;
 
-      // Run hybrid N times
       const multiHybrid = runGAMultiple(ctx.P, seedSol, ctx.demandPoints, ctx.ws, bestGAMode, N);
 
-      // Store results
       results.hybrid = multiHybrid.bestRun.sol;
       metrics.hybrid = multiHybrid.medianMetrics;
       results._multiHybrid = multiHybrid;
@@ -1371,26 +1645,22 @@
       const {bestIdx: best3, isTie: tie3} = pickBestFromMetrics(entries);
       setWinnerTag("stage3Winner", entries[best3].label, tie3);
 
-      // Update map: LSOA layer = seed, GA layer = best hybrid run
       setPlanLayer(lsoaPlanLayer, seedSol, "LSOA (seed)");
       finalPlanGA = results.hybrid;
       setPlanLayer(gaPlanLayer, results.hybrid, "Hybrid");
 
       setStageState(3,"done");
 
-      // Enable exports for hybrid
       document.getElementById("btnExportFinal").disabled = false;
       document.getElementById("btnExportFinalGeo").disabled = false;
 
-      // Build final compare table
       renderFinalCompare(ctx);
-
-      // Render hybrid shortlist
       renderHybridList();
 
       const elapsed=((performance.now()-t0)/1000).toFixed(1);
       document.getElementById("stage3Time").textContent=`${elapsed}s`;
       setStatus(`All 3 stages complete (${elapsed}s). Hybrid: ${N} runs. Switch to "Final compare" for full overview.`);
+      } finally { candPts = saved; }
     }, 50);
   }
 
@@ -1483,22 +1753,81 @@
     }
     addHover(supplyLayer);addHover(candLayer);addHover(lsoaPlanLayer);addHover(gaPlanLayer);
 
-    // Click handlers for plan layers
+    let _candClickGuard = false; // prevents map "add" click when clicking a feature
+
+    // Supply layer click info
+    supplyLayer.addListener("click",e=>{
+      _candClickGuard = true; setTimeout(()=>{ _candClickGuard = false; }, 100);
+      if(editMode !== "navigate") return;
+      const ft = e.feature;
+      const name = ft.getProperty("name")||ft.getProperty("operator")||"";
+      const sockets = ft.getProperty("sockets")||ft.getProperty("SocketCount")||"?";
+      info.setContent(`<b>Existing charger</b><br/>${escapeHtml(name)}<br/>Sockets: ${sockets}`);
+      info.setPosition(e.latLng); info.open({map});
+    });
+
+    // Click handlers for plan layers (only in navigate mode)
     lsoaPlanLayer.addListener("click",e=>{
+      _candClickGuard = true; setTimeout(()=>{ _candClickGuard = false; }, 100);
+      if(editMode !== "navigate") return;
       const ft=e.feature;
       info.setContent(`<b>LSOA Plan</b><br/>Rank: ${ft.getProperty("rank")}<br/>Name: ${escapeHtml(ft.getProperty("name")||"")}<br/>Score: ${num(ft.getProperty("score"),0).toFixed(3)}<br/>LSOA: ${escapeHtml(ft.getProperty("lsoa")||"")}`);
       info.setPosition(e.latLng);info.open({map});
     });
     gaPlanLayer.addListener("click",e=>{
+      _candClickGuard = true; setTimeout(()=>{ _candClickGuard = false; }, 100);
+      if(editMode !== "navigate") return;
       const ft=e.feature;
       info.setContent(`<b>${escapeHtml(ft.getProperty("plan")||"GA")} Plan</b><br/>Rank: ${ft.getProperty("rank")}<br/>Name: ${escapeHtml(ft.getProperty("name")||"")}<br/>Score: ${num(ft.getProperty("score"),0).toFixed(3)}<br/>LSOA: ${escapeHtml(ft.getProperty("lsoa")||"")}`);
       info.setPosition(e.latLng);info.open({map});
     });
     lsoaLayer.addListener("click",e=>{
+      _candClickGuard = true; setTimeout(()=>{ _candClickGuard = false; }, 100);
+      if(editMode !== "navigate") return;
       const ft=e.feature;const code=ft.getProperty("LSOA21CD")||ft.getProperty("lsoa21cd")||ft.getProperty("code")||"";
       const gap=num(ft.getProperty("_gapScore"),NaN);
       info.setContent(`<b>LSOA: ${escapeHtml(code)}</b><br/>Gap score: ${Number.isFinite(gap)?gap.toFixed(3):"n/a"}`);
       info.setPosition(e.latLng);info.open({map});
+    });
+
+    // Candidate layer click — supports exclude and lock modes
+    candLayer.addListener("click",e=>{
+      _candClickGuard = true;
+      setTimeout(()=>{ _candClickGuard = false; }, 100);
+
+      const ft = e.feature;
+      const idx = ft.getProperty("_idx");
+      const c = (idx !== undefined && idx < candPts.length) ? candPts[idx] : null;
+
+      if(editMode === "exclude" && c){
+        toggleExclude(c);
+        return;
+      }
+      if(editMode === "lock" && c){
+        toggleLock(c);
+        return;
+      }
+      // Navigate mode: show info
+      if(editMode === "navigate" && c){
+        const isEx = excludedSet.has(c) ? " [EXCLUDED]" : "";
+        const isLk = lockedSet.has(c) ? " [LOCKED]" : "";
+        info.setContent(`<b>Candidate${isEx}${isLk}</b><br/>Name: ${escapeHtml(c.name||"")}<br/>LSOA: ${escapeHtml(c.lsoaCode||"")}<br/>Score: ${(c.scoreBase||0).toFixed(3)}${c._custom?"<br/><i>Custom site</i>":""}`);
+        info.setPosition(e.latLng);info.open({map});
+      }
+    });
+
+    // General map click for "add" mode
+    map.addListener("click",e=>{
+      if(editMode !== "add") return;
+      if(_candClickGuard) return; // Don't add when clicking existing candidate
+      const lat = e.latLng.lat();
+      const lng = e.latLng.lng();
+      if(lat < CARDIFF_BOUNDS.south || lat > CARDIFF_BOUNDS.north ||
+         lng < CARDIFF_BOUNDS.west || lng > CARDIFF_BOUNDS.east){
+        setStatus("Outside Cardiff bounds — cannot add candidate here.");
+        return;
+      }
+      addCustomCandidate(lat, lng);
     });
 
     styleLSOA();
@@ -1527,7 +1856,8 @@
     try{
       setStatus("Loading GeoJSON…");
       const [supply,lsoa,candidates]=await Promise.all([loadGeoJSON(DATA_URLS.supply),loadGeoJSON(DATA_URLS.lsoa),loadGeoJSON(DATA_URLS.candidates)]);
-      supplyLayer.addGeoJson(supply); lsoaLayer.addGeoJson(lsoa); candLayer.addGeoJson(candidates);
+      supplyLayer.addGeoJson(supply); lsoaLayer.addGeoJson(lsoa);
+      // Don't add candidates directly — we rebuild with _idx below
 
       // Build LSOA index
       lsoaIndex=(lsoa.features||[]).map(f=>{
@@ -1575,6 +1905,19 @@
       }
 
       computeLSOAGapScores(); styleLSOA();
+
+      // Store original candidates snapshot for reset
+      candPtsOriginal = candPts.slice();
+
+      // Build candidate layer with _idx property for editing support
+      const candFC = { type:"FeatureCollection", features: candPts.map((c,i) => ({
+        type:"Feature",
+        geometry:{ type:"Point", coordinates:[c.lng, c.lat] },
+        properties:{ name: c.name||"", _idx: i }
+      }))};
+      candLayer.addGeoJson(candFC);
+      refreshCandLayerStyle();
+      updateEditCounts();
 
       const year=String(document.getElementById("yearSel").value||"2030");
       const supplyTotal=computeSupplyTotal();
