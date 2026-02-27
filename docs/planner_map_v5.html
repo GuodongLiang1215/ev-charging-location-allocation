@@ -1094,16 +1094,27 @@
     document.body.classList.remove("cursor-add","cursor-exclude","cursor-lock");
 
     const hints = {
-      navigate: "Navigate mode — click map to view info.",
-      add: "Add mode — click map to place a new candidate site.",
-      exclude: "Exclude mode — click a candidate (orange dot) to exclude/restore it.",
-      lock: "Lock mode — click a candidate to force-include/unlock it in all plans."
+      navigate: "Navigate mode — click map features to view info.",
+      add: "Add mode — click anywhere on the map to place a new candidate site.",
+      exclude: "Exclude mode — click an orange candidate dot to toggle exclude/restore. Re-run stages after.",
+      lock: "Lock mode — click a candidate dot to force-include/unlock it. Re-run stages after."
     };
     document.getElementById("editModeHint").textContent = hints[mode] || "";
 
     if(mode==="add"){ bar.classList.add("active-add"); document.body.classList.add("cursor-add"); }
     else if(mode==="exclude"){ bar.classList.add("active-exclude"); document.body.classList.add("cursor-exclude"); }
     else if(mode==="lock"){ bar.classList.add("active-lock"); document.body.classList.add("cursor-lock"); }
+
+    // In editing modes, temporarily hide LSOA polygons so they don't intercept clicks
+    // on candidate points. Restore when back to navigate mode.
+    if(lsoaLayer){
+      if(mode === "navigate"){
+        const ck = document.getElementById("ckLSOA");
+        lsoaLayer.setMap(ck && ck.checked ? map : null);
+      } else {
+        lsoaLayer.setMap(null);
+      }
+    }
   }
 
   function updateEditCounts(){
@@ -1753,11 +1764,22 @@
     }
     addHover(supplyLayer);addHover(candLayer);addHover(lsoaPlanLayer);addHover(gaPlanLayer);
 
-    let _candClickGuard = false; // prevents map "add" click when clicking a feature
+    let _pointClickGuard = false; // prevents map "add" click when clicking a POINT feature
 
-    // Supply layer click info
+    // Helper: find the candPts object matching a plan feature's lat/lng
+    function findCandByLatLng(lat, lng){
+      const p = attachRad({lat, lng});
+      let best = null, bestD = Infinity;
+      for(const c of candPts){
+        const d = distFast(p, c);
+        if(d < bestD){ bestD = d; best = c; }
+      }
+      return (best && bestD < 50) ? best : null; // within 50m
+    }
+
+    // Supply layer click
     supplyLayer.addListener("click",e=>{
-      _candClickGuard = true; setTimeout(()=>{ _candClickGuard = false; }, 100);
+      _pointClickGuard = true; setTimeout(()=>{ _pointClickGuard = false; }, 150);
       if(editMode !== "navigate") return;
       const ft = e.feature;
       const name = ft.getProperty("name")||ft.getProperty("operator")||"";
@@ -1766,24 +1788,51 @@
       info.setPosition(e.latLng); info.open({map});
     });
 
-    // Click handlers for plan layers (only in navigate mode)
+    // LSOA Plan layer click — supports exclude/lock on result points
     lsoaPlanLayer.addListener("click",e=>{
-      _candClickGuard = true; setTimeout(()=>{ _candClickGuard = false; }, 100);
-      if(editMode !== "navigate") return;
-      const ft=e.feature;
+      _pointClickGuard = true; setTimeout(()=>{ _pointClickGuard = false; }, 150);
+      const ft = e.feature;
+      const lat = e.latLng.lat(), lng = e.latLng.lng();
+
+      if(editMode === "exclude"){
+        const c = findCandByLatLng(lat, lng);
+        if(c){ toggleExclude(c); setStatus(`Excluded result site: ${c.name||"candidate"}. Re-run stages to update.`); }
+        return;
+      }
+      if(editMode === "lock"){
+        const c = findCandByLatLng(lat, lng);
+        if(c){ toggleLock(c); setStatus(`Toggled lock on result site: ${c.name||"candidate"}. Re-run stages to update.`); }
+        return;
+      }
+      // Navigate
       info.setContent(`<b>LSOA Plan</b><br/>Rank: ${ft.getProperty("rank")}<br/>Name: ${escapeHtml(ft.getProperty("name")||"")}<br/>Score: ${num(ft.getProperty("score"),0).toFixed(3)}<br/>LSOA: ${escapeHtml(ft.getProperty("lsoa")||"")}`);
       info.setPosition(e.latLng);info.open({map});
     });
+
+    // GA/Hybrid Plan layer click — supports exclude/lock on result points
     gaPlanLayer.addListener("click",e=>{
-      _candClickGuard = true; setTimeout(()=>{ _candClickGuard = false; }, 100);
-      if(editMode !== "navigate") return;
-      const ft=e.feature;
+      _pointClickGuard = true; setTimeout(()=>{ _pointClickGuard = false; }, 150);
+      const ft = e.feature;
+      const lat = e.latLng.lat(), lng = e.latLng.lng();
+
+      if(editMode === "exclude"){
+        const c = findCandByLatLng(lat, lng);
+        if(c){ toggleExclude(c); setStatus(`Excluded result site: ${c.name||"candidate"}. Re-run stages to update.`); }
+        return;
+      }
+      if(editMode === "lock"){
+        const c = findCandByLatLng(lat, lng);
+        if(c){ toggleLock(c); setStatus(`Toggled lock on result site: ${c.name||"candidate"}. Re-run stages to update.`); }
+        return;
+      }
+      // Navigate
       info.setContent(`<b>${escapeHtml(ft.getProperty("plan")||"GA")} Plan</b><br/>Rank: ${ft.getProperty("rank")}<br/>Name: ${escapeHtml(ft.getProperty("name")||"")}<br/>Score: ${num(ft.getProperty("score"),0).toFixed(3)}<br/>LSOA: ${escapeHtml(ft.getProperty("lsoa")||"")}`);
       info.setPosition(e.latLng);info.open({map});
     });
+
+    // LSOA polygon layer — NO guard (polygons cover entire map, must not block "add" mode)
     lsoaLayer.addListener("click",e=>{
-      _candClickGuard = true; setTimeout(()=>{ _candClickGuard = false; }, 100);
-      if(editMode !== "navigate") return;
+      if(editMode !== "navigate") return; // ignore in add/exclude/lock mode
       const ft=e.feature;const code=ft.getProperty("LSOA21CD")||ft.getProperty("lsoa21cd")||ft.getProperty("code")||"";
       const gap=num(ft.getProperty("_gapScore"),NaN);
       info.setContent(`<b>LSOA: ${escapeHtml(code)}</b><br/>Gap score: ${Number.isFinite(gap)?gap.toFixed(3):"n/a"}`);
@@ -1792,8 +1841,8 @@
 
     // Candidate layer click — supports exclude and lock modes
     candLayer.addListener("click",e=>{
-      _candClickGuard = true;
-      setTimeout(()=>{ _candClickGuard = false; }, 100);
+      _pointClickGuard = true;
+      setTimeout(()=>{ _pointClickGuard = false; }, 150);
 
       const ft = e.feature;
       const idx = ft.getProperty("_idx");
@@ -1816,18 +1865,34 @@
       }
     });
 
-    // General map click for "add" mode
+    // General map click — "add" mode adds new site, "exclude"/"lock" use proximity fallback
     map.addListener("click",e=>{
-      if(editMode !== "add") return;
-      if(_candClickGuard) return; // Don't add when clicking existing candidate
       const lat = e.latLng.lat();
       const lng = e.latLng.lng();
-      if(lat < CARDIFF_BOUNDS.south || lat > CARDIFF_BOUNDS.north ||
-         lng < CARDIFF_BOUNDS.west || lng > CARDIFF_BOUNDS.east){
-        setStatus("Outside Cardiff bounds — cannot add candidate here.");
+
+      if(editMode === "add"){
+        if(_pointClickGuard) return;
+        if(lat < CARDIFF_BOUNDS.south || lat > CARDIFF_BOUNDS.north ||
+           lng < CARDIFF_BOUNDS.west || lng > CARDIFF_BOUNDS.east){
+          setStatus("Outside Cardiff bounds — cannot add candidate here.");
+          return;
+        }
+        addCustomCandidate(lat, lng);
         return;
       }
-      addCustomCandidate(lat, lng);
+
+      // Proximity fallback for exclude/lock: if user clicked map but missed the dot
+      if(editMode === "exclude" || editMode === "lock"){
+        if(_pointClickGuard) return; // already handled by candLayer click
+        const idx = findCandIdxNearClick(lat, lng);
+        if(idx >= 0){
+          const c = candPts[idx];
+          if(editMode === "exclude") toggleExclude(c);
+          else toggleLock(c);
+        } else {
+          setStatus("No candidate found nearby. Click closer to an orange dot.");
+        }
+      }
     });
 
     styleLSOA();
