@@ -82,7 +82,7 @@
     <!-- Origin / Recommend -->
     <div class="row">
       <button id="btnMyLoc" class="btn secondary">Use my location</button>
-      <button id="btnRecommend" class="btn" disabled>Recommend best chargers (ETA)</button>
+      <button id="btnRecommend" class="btn" disabled>Recommend best chargers</button>
     </div>
 
     <div class="row">
@@ -93,8 +93,6 @@
     <div class="row">
       <label><input id="ckTraffic" type="checkbox" checked> Live traffic</label>
       <label><input id="ckSupply" type="checkbox" checked> Existing chargers</label>
-      <label><input id="ckLSOA" type="checkbox"> LSOA boundary (optional)</label>
-      <label><input id="ckPlanned" type="checkbox"> Planned sites (optional)</label>
     </div>
 
     <div class="hint">Tip: traffic lines are clearer at zoom ≥ 12. You can click on the map to set an origin (fallback).</div>
@@ -107,9 +105,9 @@
           <span class="badge" id="countBadge">0</span>
         </div>
         <div class="row" style="margin:0;">
-          <span class="pill active" id="sortEta">Sort: ETA</span>
+          <span class="pill" id="sortEta">Sort: ETA</span>
           <span class="pill" id="sortDist">Sort: Distance</span>
-          <span class="pill" id="sortBal">Sort: Balanced</span>
+          <span class="pill active" id="sortBal">Sort: Balanced</span>
         </div>
       </div>
 
@@ -132,8 +130,6 @@
       <b>Legend</b><br/>
       <div><span class="swatch" style="background:#2563eb;"></span>Blue dots: existing chargers</div>
       <div><span class="swatch" style="background:#ef4444;"></span>Red star: your origin (search / my location / click)</div>
-      <div><span class="swatch" style="background:#ef4444; clip-path: polygon(50% 0%, 0% 100%, 100% 100%); border-radius:2px;"></span>Red triangles: planned sites (optional / planner layer)</div>
-      <div class="muted" style="margin-top:6px;">Note: demand centroids are planning-only layers → keep them in Planner view by default.</div>
     </div>
   </div>
 
@@ -143,9 +139,7 @@
 
     const BASE = new URL("./", window.location.href);
     const DATA_URLS = {
-      supply: new URL("data/processed/supply_chargers_ocm.geojson", BASE).href,
-      lsoa:   new URL("data/processed/demand_lsoa_cardiff_exact.geojson", BASE).href,
-      planned:new URL("data/processed/new_sites_p10.geojson", BASE).href // optional
+      supply: new URL("data/processed/supply_chargers_ocm.geojson", BASE).href
     };
 
     const CARDIFF_BOUNDS = { north: 51.566, south: 51.410, east: -3.065, west: -3.333 };
@@ -155,7 +149,7 @@
     const AUTO_PREVIEW_TOP1_ROUTE = true;
 
     let map, info;
-    let trafficLayer, lsoaLayer, supplyLayer, plannedLayer;
+    let trafficLayer, supplyLayer;
     let originMarker = null;
     let originLatLng = null;
 
@@ -164,13 +158,34 @@
     let distanceMatrixService = null;
 
     let supplyPoints = [];
-    let plannedPoints = [];
 
-    let sortMode = "eta"; // "eta" | "dist" | "bal"
+    let sortMode = "bal"; // "eta" | "dist" | "bal" — default Balanced per survey (52%)
     let lastResults = [];
 
     // quick nav state
     let lastTopList = [];
+    let highlightedFeature = null;
+
+    function highlightSupplyFeature(lat, lng) {
+      // Revert previous highlight
+      if (highlightedFeature) {
+        supplyLayer.revertStyle(highlightedFeature);
+        highlightedFeature = null;
+      }
+      // Find matching feature and highlight it
+      supplyLayer.forEach((feature) => {
+        const geom = feature.getGeometry();
+        if (!geom || geom.getType() !== "Point") return;
+        const pos = geom.get();
+        if (Math.abs(pos.lat() - lat) < 0.0001 && Math.abs(pos.lng() - lng) < 0.0001) {
+          supplyLayer.overrideStyle(feature, {
+            icon: supplyIcon(16, 6, "#f59e0b"),
+            zIndex: 99999
+          });
+          highlightedFeature = feature;
+        }
+      });
+    }
 
     function setStatus(msg) {
       document.getElementById("status").textContent = msg || "";
@@ -312,23 +327,12 @@
       };
     }
 
-    function plannedIcon() {
-      return {
-        path: google.maps.SymbolPath.BACKWARD_CLOSED_ARROW,
-        fillColor: "#ef4444",
-        fillOpacity: 0.95,
-        strokeColor: "#ffffff",
-        strokeOpacity: 1,
-        strokeWeight: 1,
-        scale: 7
-      };
-    }
 
     function initSupplyLayerStyles() {
-      supplyLayer.setStyle(() => ({ icon: supplyIcon(9, 4), zIndex: 1000 }));
+      supplyLayer.setStyle(() => ({ icon: supplyIcon(11, 4), zIndex: 1000 }));
 
       supplyLayer.addListener("mouseover", (e) => {
-        supplyLayer.overrideStyle(e.feature, { icon: supplyIcon(12, 5, "#1d4ed8"), zIndex: 9999 });
+        supplyLayer.overrideStyle(e.feature, { icon: supplyIcon(14, 5, "#1d4ed8"), zIndex: 9999 });
         const name = e.feature.getProperty("name") || "Charger";
         info.setContent(`<b>${escapeHtml(name)}</b><br/>Hover highlight`);
         info.setPosition(e.latLng);
@@ -343,16 +347,6 @@
       supplyLayer.addListener("click", (e) => {
         const name = e.feature.getProperty("name") || "Charger";
         info.setContent(`<b>${escapeHtml(name)}</b><br/>Tip: use the list below to preview route or open navigation.`);
-        info.setPosition(e.latLng);
-        info.open({ map });
-      });
-    }
-
-    function initPlannedLayerStyles() {
-      plannedLayer.setStyle(() => ({ icon: plannedIcon(), zIndex: 900 }));
-      plannedLayer.addListener("click", (e) => {
-        const id = e.feature.getProperty("id") || e.feature.getProperty("site_id") || "planned";
-        info.setContent(`<b>Planned site</b><br/>id: ${escapeHtml(id)}<br/>(Planner layer - optional)`);
         info.setPosition(e.latLng);
         info.open({ map });
       });
@@ -510,6 +504,7 @@
     }
 
     function focusItem(it, idx, silent=false) {
+      highlightSupplyFeature(it.lat, it.lng);
       map.panTo({ lat: it.lat, lng: it.lng });
       map.setZoom(Math.max(map.getZoom(), 14));
       if (!silent) drawRouteTo(it);
@@ -591,12 +586,14 @@
         const eta = fmtSec(it.etaTrafficSec);
         const dist = isFinite(it.distanceMeters) ? `${km(it.distanceMeters)} km` : "n/a";
         const delay = isFinite(it.delaySec) ? `+${Math.round(it.delaySec/60)} min traffic` : "traffic Δ n/a";
+        const power = Number(it.power_kw || it.power || 0);
+        const powerLabel = power > 0 ? `${power} kW` : "kW n/a";
 
         meta.innerHTML = `
           <span class="badge">ETA: ${escapeHtml(eta)}</span>
           <span class="badge">Distance: ${escapeHtml(dist)}</span>
           <span class="badge">${escapeHtml(delay)}</span>
-          <span class="badge">Availability: unknown</span>
+          <span class="badge">⚡ ${escapeHtml(powerLabel)}</span>
         `;
 
         const actions = document.createElement("div");
@@ -657,24 +654,10 @@
       trafficLayer = new google.maps.TrafficLayer();
       trafficLayer.setMap(map);
 
-      lsoaLayer = new google.maps.Data();
-      lsoaLayer.setStyle({
-        fillColor: "#93c5fd",
-        fillOpacity: 0.22,
-        strokeColor: "#2563eb",
-        strokeOpacity: 0.9,
-        strokeWeight: 2
-      });
-      lsoaLayer.setMap(null);
-
       supplyLayer = new google.maps.Data();
       supplyLayer.setMap(map);
 
-      plannedLayer = new google.maps.Data();
-      plannedLayer.setMap(null);
-
       initSupplyLayerStyles();
-      initPlannedLayerStyles();
 
       directionsService = new google.maps.DirectionsService();
       directionsRenderer = new google.maps.DirectionsRenderer({ map, suppressMarkers: true, preserveViewport: true });
@@ -682,8 +665,6 @@
 
       document.getElementById("ckTraffic").addEventListener("change", (e) => trafficLayer.setMap(e.target.checked ? map : null));
       document.getElementById("ckSupply").addEventListener("change", (e) => supplyLayer.setMap(e.target.checked ? map : null));
-      document.getElementById("ckLSOA").addEventListener("change", (e) => lsoaLayer.setMap(e.target.checked ? map : null));
-      document.getElementById("ckPlanned").addEventListener("change", (e) => plannedLayer.setMap(e.target.checked ? map : null));
       document.getElementById("ckUnlock").addEventListener("change", (e) => applyMapRestriction(!e.target.checked));
 
       document.getElementById("sortEta").addEventListener("click", () => setSort("eta"));
@@ -766,10 +747,8 @@
       try {
         setStatus("Loading GeoJSON…");
 
-        const [supply, lsoa, planned] = await Promise.all([
-          loadGeoJSON(DATA_URLS.supply),
-          loadGeoJSON(DATA_URLS.lsoa),
-          loadGeoJSON(DATA_URLS.planned).catch(() => null)
+        const [supply] = await Promise.all([
+          loadGeoJSON(DATA_URLS.supply)
         ]);
 
         supplyLayer.addGeoJson(supply);
@@ -807,17 +786,11 @@
           }
         });
 
-        lsoaLayer.addGeoJson(lsoa);
-
-        if (planned) plannedLayer.addGeoJson(planned);
-
         map.fitBounds(CARDIFF_BOUNDS);
         setStatus(
           `Loaded.\n` +
-          `Existing chargers: ${supplyPoints.length}\n` +
-          `LSOA polygons: ${(lsoa.features||[]).length}\n` +
-          `Planned sites: ${(planned && planned.features)? planned.features.length : 0}\n\n` +
-          `Search / My location / Click map → auto recommend (Top 5 by traffic-aware ETA).`
+          `Existing chargers: ${supplyPoints.length}\n\n` +
+          `Search / My location / Click map → auto recommend (Top 5 by Balanced).`
         );
 
       } catch (err) {
