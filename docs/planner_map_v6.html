@@ -281,7 +281,7 @@
   let bestMethodKey = null;
   let planASol = null, planBSol = null;
   let baselineMetrics = null;
-  let preEditBestMetrics = null;
+  let previousRunSnapshot = null; // {key -> metrics} from last compare run, for delta display
   let worstCache = { set: new Set(), codes: [], currentAgg: new Map(), pct: 20 };
 
   // ===============================
@@ -480,9 +480,18 @@
   function runSelectedComparison(){
     var ctx=commonPrecompute();if(!ctx)return;
     var t0=performance.now();
-    if(!preEditBestMetrics && bestMethodKey && compareResultsStore[bestMethodKey]){
-      preEditBestMetrics=Object.assign({},compareResultsStore[bestMethodKey].metrics);
+
+    // Snapshot current results before overwriting (for delta display)
+    var prevSnapshot=null;
+    if(bestMethodKey && Object.keys(compareResultsStore).length>0){
+      prevSnapshot={};
+      for(var sk in compareResultsStore){
+        if(compareResultsStore[sk]&&compareResultsStore[sk].metrics){
+          prevSnapshot[sk]=Object.assign({},compareResultsStore[sk].metrics);
+        }
+      }
     }
+
     var checked={
       lsoaRank:document.getElementById("ckLsoaRank").checked,
       lsoaGreedy:document.getElementById("ckLsoaGreedy").checked,
@@ -523,37 +532,74 @@
     if(!entries.length){setStatus("No results.");return;}
     var best=pickBestFromMetrics(entries);
     bestMethodKey=entries[best.bestIdx]._key;
-    renderComparisonTable(entries);
+
+    // Save snapshot for next comparison
+    previousRunSnapshot=prevSnapshot;
+
+    renderComparisonTable(entries, previousRunSnapshot);
     document.getElementById("compareResults").style.display="block";
     var elapsed=((performance.now()-t0)/1000).toFixed(1);
     var gaInfo=entries.some(function(e){return e.N;})?" (GA: "+N+" runs each)":"";
-    document.getElementById("compareRunInfo").textContent="P="+ctx.P+", "+entries.length+" methods"+gaInfo;
+    var deltaNote=previousRunSnapshot?" | Δ = change from previous run":"";
+    document.getElementById("compareRunInfo").textContent="P="+ctx.P+", "+entries.length+" methods"+gaInfo+deltaNote;
     document.getElementById("compareTime").textContent=elapsed+"s";
     planASol=entries[best.bestIdx].sol;setPlanLayer(planALayer,planASol,"Plan A: "+entries[best.bestIdx].label);
     if(entries.length>1){var si=best.bestIdx===0?1:0;planBSol=entries[si].sol;setPlanLayer(planBLayer,planBSol,"Plan B: "+entries[si].label);}
     document.getElementById("btnExportBest").disabled=false;document.getElementById("btnExportBestGeo").disabled=false;
     renderBestList(planASol,entries[best.bestIdx].label);
-    if(preEditBestMetrics)renderEditDeltas(entries[best.bestIdx].metrics);
-    setStatus("Done ("+elapsed+"s). Best: "+entries[best.bestIdx].label+(best.isTie?" (tie)":"")+".");
+    if(previousRunSnapshot)renderEditDeltas(entries[best.bestIdx].metrics);
+    setStatus("Done ("+elapsed+"s). Best: "+entries[best.bestIdx].label+(best.isTie?" (tie)":"")+(previousRunSnapshot?" [Δ deltas shown vs previous run]":"")+".");
   }
 
-  function renderComparisonTable(entries){
+  function renderComparisonTable(entries, prevSnapshot){
     var thead=document.getElementById("compareThead"),tbody=document.getElementById("compareBody");
     thead.innerHTML="";tbody.innerHTML="";
     var htr=document.createElement("tr");htr.innerHTML="<th>KPI</th>";
     for(var i=0;i<entries.length;i++)htr.innerHTML+="<th>"+escapeHtml(entries[i].label)+"</th>";
     thead.appendChild(htr);
+
     for(var ki=0;ki<KPI_DEFS.length;ki++){
       var kpi=KPI_DEFS[ki];
       var tr=document.createElement("tr");tr.innerHTML="<td style=\"font-weight:700\">"+kpi.name+"</td>";
       var vals=entries.map(function(e){return e.metrics?e.metrics[kpi.key]:NaN;});
       var finite=vals.filter(Number.isFinite);var allEq=finite.length>0&&finite.every(function(v){return Math.abs(v-finite[0])<1e-6;});
       var bIdx=-1;if(!allEq){var bVal=kpi.higherIsBetter?-Infinity:Infinity;for(var j=0;j<vals.length;j++){if(!Number.isFinite(vals[j]))continue;if(kpi.higherIsBetter?(vals[j]>bVal+1e-6):(vals[j]<bVal-1e-6)){bVal=vals[j];bIdx=j;}}}
+
       for(var j2=0;j2<entries.length;j2++){
         var td=document.createElement("td");var mainText=kpi.fmt(vals[j2]);
-        if(entries[j2].stdMetrics){var sig=fmtSigma(kpi,entries[j2].stdMetrics[kpi.key]);td.innerHTML=sig?escapeHtml(mainText)+" <span style=\"color:#9ca3af;font-size:9px\">\u00b1"+sig+"</span>":escapeHtml(mainText);}
-        else td.textContent=mainText;
-        if(j2===bIdx&&bIdx>=0)td.className="win";tr.appendChild(td);
+        var html="";
+
+        // Main value + sigma
+        if(entries[j2].stdMetrics){
+          var sig=fmtSigma(kpi,entries[j2].stdMetrics[kpi.key]);
+          html=sig?escapeHtml(mainText)+" <span style=\"color:#9ca3af;font-size:9px\">\u00b1"+sig+"</span>":escapeHtml(mainText);
+        } else {
+          html=escapeHtml(mainText);
+        }
+
+        // Delta from previous run (if available for this method)
+        if(prevSnapshot && entries[j2]._key && prevSnapshot[entries[j2]._key]){
+          var prevVal=prevSnapshot[entries[j2]._key][kpi.key];
+          var curVal=vals[j2];
+          if(Number.isFinite(prevVal)&&Number.isFinite(curVal)){
+            var delta=curVal-prevVal;
+            if(Math.abs(delta)>0.0005){
+              var better=kpi.higherIsBetter?(delta>0):(delta<0);
+              var worse=kpi.higherIsBetter?(delta<0):(delta>0);
+              var dStr="";
+              if(kpi.fmt===fmtPct)dStr=(delta>=0?"+":"")+((delta*100).toFixed(1))+"%";
+              else if(kpi.fmt===fmtPP)dStr=(delta>=0?"+":"")+((delta*100).toFixed(1))+"pp";
+              else if(kpi.fmt===fmtInt)dStr=(delta>=0?"+":"")+Math.round(delta);
+              else dStr=(delta>=0?"+":"")+delta.toFixed(3);
+              var color=better?"#059669":worse?"#ef4444":"#6b7280";
+              html+=" <span style=\"font-size:9px;font-weight:700;color:"+color+"\">("+dStr+")</span>";
+            }
+          }
+        }
+
+        td.innerHTML=html;
+        if(j2===bIdx&&bIdx>=0)td.className="win";
+        tr.appendChild(td);
       }
       tbody.appendChild(tr);
     }
@@ -574,12 +620,16 @@
   // FEATURE 5: Before/after edit delta display
   // ===============================
   function renderEditDeltas(afterMetrics){
-    if(!preEditBestMetrics||!afterMetrics){document.getElementById("editDeltaSection").style.display="none";return;}
+    // Show edit panel delta table using previousRunSnapshot for best method
+    if(!previousRunSnapshot||!bestMethodKey||!previousRunSnapshot[bestMethodKey]||!afterMetrics){
+      document.getElementById("editDeltaSection").style.display="none";return;
+    }
+    var prevBestMetrics=previousRunSnapshot[bestMethodKey];
     document.getElementById("editDeltaSection").style.display="block";
     var tbody=document.getElementById("editDeltaBody");tbody.innerHTML="";
     for(var ki=0;ki<KPI_DEFS.length;ki++){
       var kpi=KPI_DEFS[ki];
-      var bv=preEditBestMetrics[kpi.key],av=afterMetrics[kpi.key];
+      var bv=prevBestMetrics[kpi.key],av=afterMetrics[kpi.key];
       var delta=Number.isFinite(bv)&&Number.isFinite(av)?av-bv:NaN;
       var tr=document.createElement("tr");
       var deltaStr="\u2013",st="color:#6b7280";
@@ -640,7 +690,7 @@
     document.getElementById("modeAdd").addEventListener("click",function(){setEditMode("add");});
     document.getElementById("modeExclude").addEventListener("click",function(){setEditMode("exclude");});
     document.getElementById("modeLock").addEventListener("click",function(){setEditMode("lock");});
-    document.getElementById("btnResetEdits").addEventListener("click",function(){resetEdits();preEditBestMetrics=null;document.getElementById("editDeltaSection").style.display="none";});
+    document.getElementById("btnResetEdits").addEventListener("click",function(){resetEdits();previousRunSnapshot=null;document.getElementById("editDeltaSection").style.display="none";});
     document.getElementById("covMode").addEventListener("change",updateCoverageUI);
 
     try{
