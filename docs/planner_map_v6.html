@@ -223,7 +223,12 @@
 
   <div class="legend">
     <b>Legend</b><br/>
-    <span class="swatch" style="background:#2563eb"></span>Existing &nbsp;
+    <div style="margin:3px 0"><b style="font-size:10px">Charger speed:</b>
+      <span class="swatch" style="background:#6b7280"></span>Slow &nbsp;
+      <span class="swatch" style="background:#2563eb"></span>Fast &nbsp;
+      <span class="swatch" style="background:#f59e0b"></span>Rapid &nbsp;
+      <span class="swatch" style="background:#ef4444"></span>Ultra-Rapid
+    </div>
     <span class="swatch" style="background:#f59e0b"></span>Candidates &nbsp;
     <span class="swatch" style="background:#10b981"></span>Custom &nbsp;
     <span class="swatch" style="background:#ef4444"></span>Plan A ★ &nbsp;
@@ -238,7 +243,7 @@
 
   const BASE = new URL("./", window.location.href);
   const DATA_URLS = {
-    supply:     new URL("data/processed/supply_chargers_ocm.geojson", BASE).href,
+    supply:     new URL("data/processed/supply_chargers_ocm_enriched.geojson", BASE).href,
     lsoa:       new URL("data/processed/demand_lsoa_cardiff_exact_pop_wgs84_enriched.geojson", BASE).href,
     candidates: new URL("data/processed/demand_points_cardiff_exact_pop_wgs84.geojson", BASE).href
   };
@@ -265,11 +270,58 @@
     share_dense:  ["share_dense","pct_dense","dense_share","share_terraced","pct_terraced"],
     share_rented: ["share_rented","pct_rented","rented_share"],
     share_no_car: ["share_no_car","pct_no_car","no_car_share"],
-    sockets:["sockets","SocketCount","socket_count","connectors","num_sockets","units"],
-    name:   ["name","operator","location","Site","address","Address"]
+    sockets:["sockets","SocketCount","socket_count","connectors","num_sockets","units","num_points"],
+    name:   ["name","title","location","Site","address","Address"],
+    // Enriched supply fields
+    operator: ["operator","operator_name","OperatorInfo"],
+    speed_tier: ["speed_tier","speed","charger_speed"],
+    status: ["status","status_name"],
+    is_operational: ["is_operational"],
+    is_public: ["is_public"],
+    usage_cost: ["usage_cost","cost"],
+    postcode: ["postcode","Postcode"],
+    max_power_kw: ["max_power_kw","PowerKW","power_kw"],
+    connector_types: ["connector_types","connectors_str"],
+    has_ccs: ["has_ccs"],
+    has_chademo: ["has_chademo"],
+    has_type2: ["has_type2"],
   };
 
-  // ===============================
+  // Speed tier → icon colour + estimated kW for capacity weighting
+  const SPEED_COLORS = {
+    "Slow (5-7kW)":           "#6b7280",  // grey
+    "Slow (<5kW)":            "#6b7280",
+    "Fast (5-7kW)":           "#6b7280",
+    "Fast (7-22kW)":          "#2563eb",  // blue
+    "Fast":                   "#2563eb",
+    "Fast (7-50kW)":          "#2563eb",
+    "Mixed (7-50kW)":         "#8b5cf6",  // purple
+    "Rapid (high £/kWh)":     "#f59e0b",  // amber
+    "Rapid (50kW)":           "#f59e0b",
+    "Rapid (22-50kW)":        "#f59e0b",
+    "Rapid (50-150kW)":       "#ef4444",  // red
+    "Rapid (50-125kW)":       "#ef4444",
+    "Rapid (50-350kW)":       "#ef4444",
+    "Rapid/DC":               "#ef4444",
+    "Ultra-Rapid (50-100kW)": "#dc2626",  // dark red
+    "Ultra-Rapid (120-250kW)":"#dc2626",
+    "Ultra-Rapid (150-300kW)":"#dc2626",
+    "Ultra-Rapid (150-350kW)":"#dc2626",
+    "Ultra-Rapid (>100kW)":   "#dc2626",
+    "Workplace/Free":         "#10b981",  // green
+    "Unknown":                "#9ca3af",  // light grey
+  };
+  // Estimated kW for capacity weighting when max_power_kw is missing
+  const SPEED_EST_KW = {
+    "Slow":7, "Fast":11, "Mixed":22, "Rapid":50, "Ultra-Rapid":150, "Workplace":7, "Unknown":7
+  };
+  function estimateKW(speedTier, maxPowerKw){
+    if(maxPowerKw && Number.isFinite(maxPowerKw) && maxPowerKw > 0) return maxPowerKw;
+    if(!speedTier) return 7;
+    for(var key in SPEED_EST_KW){ if(speedTier.indexOf(key)>=0) return SPEED_EST_KW[key]; }
+    return 7;
+  }
+  function speedColor(tier){ return SPEED_COLORS[tier] || "#9ca3af"; }
   
 
   // ===============================
@@ -720,17 +772,17 @@
     info=new google.maps.InfoWindow();
     supplyLayer=new google.maps.Data({map});lsoaLayer=new google.maps.Data({map});candLayer=new google.maps.Data({map});
     planALayer=new google.maps.Data({map});planBLayer=new google.maps.Data({map});
-    supplyLayer.setStyle(function(ft){var h=!!ft.getProperty("_hover");return{icon:iconCircle("#2563eb",h?10:8,h?5:4),zIndex:800};});
+    supplyLayer.setStyle(function(ft){var h=!!ft.getProperty("_hover");var tier=ft.getProperty("speed_tier")||"Unknown";var col=speedColor(tier);var sz=h?10:7;if(tier.indexOf("Rapid")>=0||tier.indexOf("Ultra")>=0)sz=h?12:9;return{icon:iconCircle(col,sz,h?4:2),zIndex:800};});
     planALayer.setStyle(function(ft){var h=!!ft.getProperty("_hover");return{icon:iconStar("#ef4444",h?1.35:1.15),zIndex:9999};});
     planBLayer.setStyle(function(ft){var h=!!ft.getProperty("_hover");return{icon:iconDiamond("#7c3aed",h?1.0:0.85),zIndex:9998};});
     function addHover(layer){layer.addListener("mouseover",function(e){e.feature.setProperty("_hover",true);});layer.addListener("mouseout",function(e){e.feature.setProperty("_hover",false);});}
     addHover(supplyLayer);addHover(candLayer);addHover(planALayer);addHover(planBLayer);
     var _ptGuard=false;
     function findCandByLatLng(lat,lng){var p=attachRad({lat:lat,lng:lng});var best=null,bestD=Infinity;for(var i=0;i<candPts.length;i++){var d=distFast(p,candPts[i]);if(d<bestD){bestD=d;best=candPts[i];}}return(best&&bestD<50)?best:null;}
-    supplyLayer.addListener("click",function(e){_ptGuard=true;setTimeout(function(){_ptGuard=false;},150);if(editMode!=="navigate")return;var ft=e.feature;info.setContent("<b>Existing charger</b><br/>"+escapeHtml(ft.getProperty("name")||ft.getProperty("operator")||"")+"<br/>Sockets: "+(ft.getProperty("sockets")||ft.getProperty("SocketCount")||"?"));info.setPosition(e.latLng);info.open({map:map});});
+    supplyLayer.addListener("click",function(e){_ptGuard=true;setTimeout(function(){_ptGuard=false;},150);if(editMode!=="navigate")return;var ft=e.feature;var name=ft.getProperty("name")||ft.getProperty("title")||"";var op=ft.getProperty("operator")||"";var tier=ft.getProperty("speed_tier")||"Unknown";var socks=ft.getProperty("sockets")||ft.getProperty("num_points")||"?";var status=ft.getProperty("status")||"";var cost=ft.getProperty("usage_cost")||"";var pc=ft.getProperty("postcode")||"";var conn=ft.getProperty("connector_types")||"";var pkw=ft.getProperty("max_power_kw");var tierCol=speedColor(tier);var html="<div style='min-width:220px'><b style='font-size:13px'>"+escapeHtml(name)+"</b>";html+="<div style='margin:4px 0;display:inline-block;padding:2px 8px;border-radius:99px;font-size:10px;font-weight:700;color:#fff;background:"+tierCol+"'>"+escapeHtml(tier)+"</div>";html+="<table style='font-size:12px;margin-top:4px;border-collapse:collapse'>";html+="<tr><td style='padding:2px 10px 2px 0;color:#6b7280'>Operator</td><td style='font-weight:600'>"+escapeHtml(op)+"</td></tr>";html+="<tr><td style='padding:2px 10px 2px 0;color:#6b7280'>Sockets</td><td style='font-weight:600'>"+socks+"</td></tr>";if(pkw)html+="<tr><td style='padding:2px 10px 2px 0;color:#6b7280'>Max power</td><td style='font-weight:600'>"+pkw+" kW</td></tr>";if(conn)html+="<tr><td style='padding:2px 10px 2px 0;color:#6b7280'>Connectors</td><td>"+escapeHtml(conn)+"</td></tr>";if(status)html+="<tr><td style='padding:2px 10px 2px 0;color:#6b7280'>Status</td><td>"+escapeHtml(status)+"</td></tr>";if(cost)html+="<tr><td style='padding:2px 10px 2px 0;color:#6b7280'>Cost</td><td style='font-size:11px'>"+escapeHtml(cost.substring(0,80))+"</td></tr>";if(pc)html+="<tr><td style='padding:2px 10px 2px 0;color:#6b7280'>Postcode</td><td>"+escapeHtml(pc)+"</td></tr>";html+="</table></div>";info.setContent(html);info.setPosition(e.latLng);info.open({map:map});});
     planALayer.addListener("click",function(e){_ptGuard=true;setTimeout(function(){_ptGuard=false;},150);var ft=e.feature;var lat=e.latLng.lat(),lng=e.latLng.lng();if(editMode==="exclude"){var c=findCandByLatLng(lat,lng);if(c)toggleExclude(c);return;}if(editMode==="lock"){var c2=findCandByLatLng(lat,lng);if(c2)toggleLock(c2);return;}info.setContent("<b>"+escapeHtml(ft.getProperty("plan")||"Plan A")+"</b><br/>#"+ft.getProperty("rank")+" "+escapeHtml(ft.getProperty("name")||"")+"<br/>Score: "+num(ft.getProperty("score"),0).toFixed(3));info.setPosition(e.latLng);info.open({map:map});});
     planBLayer.addListener("click",function(e){_ptGuard=true;setTimeout(function(){_ptGuard=false;},150);var ft=e.feature;var lat=e.latLng.lat(),lng=e.latLng.lng();if(editMode==="exclude"){var c=findCandByLatLng(lat,lng);if(c)toggleExclude(c);return;}if(editMode==="lock"){var c2=findCandByLatLng(lat,lng);if(c2)toggleLock(c2);return;}info.setContent("<b>"+escapeHtml(ft.getProperty("plan")||"Plan B")+"</b><br/>#"+ft.getProperty("rank")+" "+escapeHtml(ft.getProperty("name")||"")+"<br/>Score: "+num(ft.getProperty("score"),0).toFixed(3));info.setPosition(e.latLng);info.open({map:map});});
-    lsoaLayer.addListener("click",function(e){if(editMode!=="navigate")return;var ft=e.feature;var code=ft.getProperty("LSOA21CD")||ft.getProperty("lsoa21cd")||ft.getProperty("code")||"";var gap=num(ft.getProperty("_gapScore"),NaN);var pop=num(ft.getProperty("population")||ft.getProperty("pop"),NaN);var rec=lsoaByCodeMap.get(code);var supply=rec?num(rec.supplyRaw,0):0;var demand=rec?num(rec.demandRaw,0):0;var equity=rec?num(rec.equityRaw,0):0;var gapPct=Number.isFinite(gap)?(gap*100).toFixed(0)+"%":"n/a";var gapBar=Number.isFinite(gap)?("<div style='margin:4px 0;height:8px;width:100%;background:#e5e7eb;border-radius:4px'><div style='height:100%;width:"+(gap*100)+"%;background:"+gapColor(gap)+";border-radius:4px'></div></div>"):"";info.setContent("<b style='font-size:13px'>LSOA: "+escapeHtml(code)+"</b>"+gapBar+"<table style='font-size:12px;margin-top:4px'><tr><td style='padding-right:12px;color:#6b7280'>Population</td><td style='font-weight:700'>"+(Number.isFinite(pop)?Math.round(pop).toLocaleString():"n/a")+"</td></tr><tr><td style='color:#6b7280'>Gap score</td><td style='font-weight:700;color:"+(gap>0.5?"#dc2626":gap>0.25?"#d97706":"#059669")+"'>"+gapPct+"</td></tr><tr><td style='color:#6b7280'>Existing supply</td><td style='font-weight:700'>"+supply+" sockets</td></tr><tr><td style='color:#6b7280'>Demand weight</td><td>"+demand.toFixed(0)+"</td></tr></table>");info.setPosition(e.latLng);info.open({map:map});});
+    lsoaLayer.addListener("click",function(e){if(editMode!=="navigate")return;var ft=e.feature;var code=ft.getProperty("LSOA21CD")||ft.getProperty("lsoa21cd")||ft.getProperty("code")||"";var gap=num(ft.getProperty("_gapScore"),NaN);var pop=num(ft.getProperty("population")||ft.getProperty("pop"),NaN);var rec=lsoaByCodeMap.get(code);var sockets=rec?num(rec.supplyRaw,0):0;var capKw=rec?num(rec.supplyCapacity,0):0;var demand=rec?num(rec.demandRaw,0):0;var gapPct=Number.isFinite(gap)?(gap*100).toFixed(0)+"%":"n/a";var gapBar=Number.isFinite(gap)?("<div style='margin:4px 0;height:8px;width:100%;background:#e5e7eb;border-radius:4px'><div style='height:100%;width:"+(gap*100)+"%;background:"+gapColor(gap)+";border-radius:4px'></div></div>"):"";info.setContent("<b style='font-size:13px'>LSOA: "+escapeHtml(code)+"</b>"+gapBar+"<table style='font-size:12px;margin-top:4px'><tr><td style='padding:2px 12px 2px 0;color:#6b7280'>Population</td><td style='font-weight:700'>"+(Number.isFinite(pop)?Math.round(pop).toLocaleString():"n/a")+"</td></tr><tr><td style='padding:2px 12px 2px 0;color:#6b7280'>Gap score</td><td style='font-weight:700;color:"+(gap>0.5?"#dc2626":gap>0.25?"#d97706":"#059669")+"'>"+gapPct+"</td></tr><tr><td style='padding:2px 12px 2px 0;color:#6b7280'>Supply</td><td style='font-weight:700'>"+sockets+" sockets ("+Math.round(capKw)+" kW)</td></tr><tr><td style='padding:2px 12px 2px 0;color:#6b7280'>Demand weight</td><td>"+demand.toFixed(0)+"</td></tr><tr><td style='padding:2px 12px 2px 0;color:#6b7280'>kW per capita</td><td>"+(pop>0?(capKw/pop).toFixed(2):"n/a")+"</td></tr></table>");info.setPosition(e.latLng);info.open({map:map});});
     candLayer.addListener("click",function(e){_ptGuard=true;setTimeout(function(){_ptGuard=false;},150);var ft=e.feature;var idx=ft.getProperty("_idx");var c=(idx!==undefined&&idx<candPts.length)?candPts[idx]:null;if(editMode==="exclude"&&c){toggleExclude(c);return;}if(editMode==="lock"&&c){toggleLock(c);return;}if(editMode==="navigate"&&c){var isEx=excludedSet.has(c)?" [EXCLUDED]":"";var isLk=lockedSet.has(c)?" [LOCKED]":"";info.setContent("<b>Candidate"+isEx+isLk+"</b><br/>Name: "+escapeHtml(c.name||"")+"<br/>LSOA: "+escapeHtml(c.lsoaCode||"")+"<br/>Score: "+(c.scoreBase||0).toFixed(3)+(c._custom?"<br/><i>Custom</i>":""));info.setPosition(e.latLng);info.open({map:map});}});
     map.addListener("click",function(e){var lat=e.latLng.lat(),lng=e.latLng.lng();if(editMode==="add"){if(_ptGuard)return;if(lat<CARDIFF_BOUNDS.south||lat>CARDIFF_BOUNDS.north||lng<CARDIFF_BOUNDS.west||lng>CARDIFF_BOUNDS.east){setStatus("Outside Cardiff bounds.");return;}addCustomCandidate(lat,lng);return;}if(editMode==="exclude"||editMode==="lock"){if(_ptGuard)return;var idx=findCandIdxNearClick(lat,lng);if(idx>=0){var c=candPts[idx];if(editMode==="exclude")toggleExclude(c);else toggleLock(c);}else setStatus("No candidate nearby.");}});
     map.addListener("zoom_changed",function(){if(activeTab==="gap")updateLSOALabels();});
@@ -774,7 +826,7 @@
       lsoaIndex=(lsoa.features||[]).map(function(f){var props=f.properties||{};var code=getProp(props,FIELD.code,"LSOA");var pop=num(getProp(props,FIELD.pop,null),NaN);var demandRaw=Number.isFinite(pop)?pop:num(getProp(props,FIELD.demand,1),1);var medAge=num(getProp(props,FIELD.median_age,null),NaN);return{code:code,pop:pop,medianAge:medAge,demandRaw:demandRaw,equityRaw:computeEquityFromProps(props,medAge),penaltyRaw:computePenaltyFromProps(props),polygons:makePolygonsFromGeometry(f.geometry),feature:null,supplyRaw:0,gap01:0};});
       lsoaByCodeMap=new Map(lsoaIndex.map(function(r){return[r.code,r];}));
       lsoaLayer.forEach(function(ft){var propsLike={LSOA21CD:ft.getProperty("LSOA21CD"),lsoa21cd:ft.getProperty("lsoa21cd"),LSOA11CD:ft.getProperty("LSOA11CD"),lsoa11cd:ft.getProperty("lsoa11cd"),code:ft.getProperty("code"),id:ft.getProperty("id")};var code=getProp(propsLike,FIELD.code,null);if(code&&lsoaByCodeMap.has(code)){var rec=lsoaByCodeMap.get(code);rec.feature=ft;ft.setProperty("code",rec.code);}});
-      supplyPts=[];for(var i=0;i<(supply.features||[]).length;i++){var f=supply.features[i];if(!f.geometry||f.geometry.type!=="Point")continue;var coords=f.geometry.coordinates||[];var lng=coords[0],lat=coords[1];if(typeof lat!=="number"||typeof lng!=="number")continue;if(looksLike27700(lng,lat))continue;supplyPts.push(attachRad({lat:lat,lng:lng,sockets:num(getProp(f.properties||{},FIELD.sockets,0),0)||1}));}
+      supplyPts=[];for(var i=0;i<(supply.features||[]).length;i++){var f=supply.features[i];if(!f.geometry||f.geometry.type!=="Point")continue;var coords=f.geometry.coordinates||[];var lng=coords[0],lat=coords[1];if(typeof lat!=="number"||typeof lng!=="number")continue;if(looksLike27700(lng,lat))continue;var sp=f.properties||{};supplyPts.push(attachRad({lat:lat,lng:lng,sockets:num(getProp(sp,FIELD.sockets,0),0)||1,name:getProp(sp,FIELD.name,""),operator:getProp(sp,FIELD.operator,""),speedTier:getProp(sp,FIELD.speed_tier,"Unknown"),status:getProp(sp,FIELD.status,""),isOperational:getProp(sp,FIELD.is_operational,true),isPublic:getProp(sp,FIELD.is_public,true),usageCost:getProp(sp,FIELD.usage_cost,""),postcode:getProp(sp,FIELD.postcode,""),maxPowerKw:num(getProp(sp,FIELD.max_power_kw,null),NaN),connectorTypes:getProp(sp,FIELD.connector_types,""),hasCCS:!!getProp(sp,FIELD.has_ccs,false),hasChademo:!!getProp(sp,FIELD.has_chademo,false),hasType2:!!getProp(sp,FIELD.has_type2,false),capacityKw:0}));supplyPts[supplyPts.length-1].capacityKw=estimateKW(supplyPts[supplyPts.length-1].speedTier,supplyPts[supplyPts.length-1].maxPowerKw)*supplyPts[supplyPts.length-1].sockets;}
       candPts=[];for(var j=0;j<(candidates.features||[]).length;j++){var f2=candidates.features[j];if(!f2.geometry||f2.geometry.type!=="Point")continue;var coords2=f2.geometry.coordinates||[];var lng2=coords2[0],lat2=coords2[1];if(typeof lat2!=="number"||typeof lng2!=="number")continue;if(looksLike27700(lng2,lat2))continue;var props2=f2.properties||{};var name=getProp(props2,["name","id","site","label","LSOA21NM","LSOA11NM"],"Candidate");var ll=new google.maps.LatLng(lat2,lng2);var rec2=joinPointToLSOA(ll);candPts.push(attachRad({lat:lat2,lng:lng2,name:name,lsoaCode:rec2?rec2.code:"",demandRaw:rec2?num(rec2.demandRaw,1):1,equityRaw:rec2?num(rec2.equityRaw,0):0,penaltyRaw:rec2?num(rec2.penaltyRaw,0):0,gapRaw:0,distToExistingM:NaN,distToExistingSq:Infinity,d01:0,e01:0,g01:0,benefit:0,costBase:0,cost:0,costConstr01:0,costNear01:0,costCluster01:0,scoreBase:0,score:0}));}
       computeLSOAGapScores();styleLSOA();
       candPtsOriginal=candPts.slice();
@@ -789,8 +841,9 @@
       var demandPoints=sampleCandidatesForCoverage();
       baselineMetrics=computeBaselineMetrics(demandPoints);
       displayBaseline(baselineMetrics);
+      var totalCap=computeTotalCapacityKw();
       map.fitBounds(CARDIFF_BOUNDS);updateCoverageUI();
-      setStatus("Loaded. Supply: "+supplyPts.length+", LSOAs: "+(lsoa.features||[]).length+", Candidates: "+candPts.length+"\nBaseline: "+(baselineMetrics.cov*100).toFixed(1)+"% coverage, avg access "+Math.round(baselineMetrics.avgDist)+"m\n\nSelect methods and click \"\u25b6 Compare Selected\".");
+      setStatus("Loaded. Supply: "+supplyPts.length+" locations, "+computeSupplyTotal()+" sockets, "+Math.round(totalCap)+" kW\nLSOAs: "+(lsoa.features||[]).length+", Candidates: "+candPts.length+"\nBaseline: "+(baselineMetrics.cov*100).toFixed(1)+"% coverage, avg access "+Math.round(baselineMetrics.avgDist)+"m\n\nSelect methods and click \"\u25b6 Compare Selected\".");
     }catch(err){console.error(err);setStatus("FAILED.\n"+String(err));alert(String(err));}
   }
 
@@ -946,20 +999,32 @@
     if(sum===0 && supplyPts.length) sum=supplyPts.length;
     return sum;
   }
+  function computeTotalCapacityKw(){
+    let sum=0; for(const p of supplyPts) sum+=num(p.capacityKw,0);
+    return sum;
+  }
   function computeLSOAGapScores(){
+    // Capacity-weighted supply per LSOA (kW), plus socket count
     const supplyByLSOA=new Map();
+    const socketsByLSOA=new Map();
     for(const s of supplyPts){
       const ll=new google.maps.LatLng(s.lat,s.lng);
       const rec=joinPointToLSOA(ll);
       if(!rec) continue;
-      supplyByLSOA.set(rec.code,(supplyByLSOA.get(rec.code)||0)+num(s.sockets,1));
+      supplyByLSOA.set(rec.code,(supplyByLSOA.get(rec.code)||0)+num(s.capacityKw,num(s.sockets,1)));
+      socketsByLSOA.set(rec.code,(socketsByLSOA.get(rec.code)||0)+num(s.sockets,1));
     }
     const dArr=[], sArr=[];
-    for(const rec of lsoaIndex){ rec.supplyRaw=supplyByLSOA.get(rec.code)||0; dArr.push(num(rec.demandRaw,0)); sArr.push(num(rec.supplyRaw,0)); }
+    for(const rec of lsoaIndex){
+      rec.supplyCapacity=supplyByLSOA.get(rec.code)||0;
+      rec.supplyRaw=socketsByLSOA.get(rec.code)||0;
+      dArr.push(num(rec.demandRaw,0));
+      sArr.push(num(rec.supplyCapacity,0));
+    }
     const nd=normalize01(dArr), ns=normalize01(sArr);
     for(const rec of lsoaIndex){
       if(!rec.feature) continue;
-      const d01=nd.norm(num(rec.demandRaw,0)), s01=ns.norm(num(rec.supplyRaw,0));
+      const d01=nd.norm(num(rec.demandRaw,0)), s01=ns.norm(num(rec.supplyCapacity,0));
       const g=Math.max(0,Math.min(1,d01-0.7*s01));
       rec.gap01=g; rec.feature.setProperty("_gapScore",g);
     }
