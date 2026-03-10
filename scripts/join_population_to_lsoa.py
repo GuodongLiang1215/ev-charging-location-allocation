@@ -7,11 +7,11 @@ from pathlib import Path
 # -----------------------
 POP_XLSX = "data/raw/demand/ons_lsoa_population_mid2024.xlsx"
 
-LSOA_GEOJSON = "docs/data/processed/demand_lsoa_cardiff_exact.geojson"
-PTS_GEOJSON  = "docs/data/processed/demand_points_cardiff_exact.geojson"
+LSOA_GEOJSON = "data/processed/demand_lsoa_cardiff_exact.geojson"
+PTS_GEOJSON  = "data/processed/demand_points_cardiff_exact.geojson"
 
-OUT_LSOA = "docs/data/processed/demand_lsoa_cardiff_exact_pop.geojson"
-OUT_PTS  = "docs/data/processed/demand_points_cardiff_exact_pop.geojson"
+OUT_LSOA = "data/processed/demand_lsoa_cardiff_exact_pop.geojson"
+OUT_PTS  = "data/processed/demand_points_cardiff_exact_pop.geojson"
 
 # -----------------------
 # Config

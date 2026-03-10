@@ -100,7 +100,18 @@
         <div class="card"><div class="h">Max access (m)</div><div class="v" id="bl_maxDist">–</div></div>
         <div class="card"><div class="h">Eq. coverage</div><div class="v" id="bl_eqCov">–</div></div>
       </div>
+      <div class="kpis k4" style="margin-top:4px">
+        <div class="card"><div class="h">Locations</div><div class="v" id="bl_locs">–</div></div>
+        <div class="card"><div class="h">Sockets</div><div class="v" id="bl_socks">–</div></div>
+        <div class="card"><div class="h">Capacity</div><div class="v" id="bl_cap">–</div></div>
+        <div class="card"><div class="h">Rapid+</div><div class="v" id="bl_rapid">–</div></div>
+      </div>
       <div class="row" style="margin-top:6px">
+        <label class="small"><input id="ckFilterOperational" type="checkbox"> Only operational</label>
+        <label class="small"><input id="ckFilterPublic" type="checkbox"> Only public</label>
+        <button id="btnApplyFilter" class="btn secondary" style="font-size:10px;padding:4px 8px">Apply filter</button>
+      </div>
+      <div class="row">
         <button id="btnFindMinP" class="btn amber" style="font-size:11px">🔍 Find min P for 100% coverage</button>
         <span id="minPResult" style="display:none" class="minPResult"></span>
       </div>
@@ -543,6 +554,71 @@
     document.getElementById("bl_avgDist").textContent=Math.round(bl.avgDist);
     document.getElementById("bl_maxDist").textContent=Math.round(bl.maxDist);
     document.getElementById("bl_eqCov").textContent=(bl.eqCov*100).toFixed(1)+"%";
+    // Supply infrastructure stats
+    document.getElementById("bl_locs").textContent=supplyPts.length;
+    document.getElementById("bl_socks").textContent=computeSupplyTotal();
+    document.getElementById("bl_cap").textContent=Math.round(computeTotalCapacityKw())+" kW";
+    var rapidCount=supplyPts.filter(function(s){return s.speedTier&&(s.speedTier.indexOf("Rapid")>=0||s.speedTier.indexOf("Ultra")>=0);}).length;
+    document.getElementById("bl_rapid").textContent=rapidCount;
+  }
+
+  // Supply filter: exclude non-operational or non-public
+  let supplyPtsAll = []; // unfiltered backup
+  function applySupplyFilter(){
+    var onlyOp=document.getElementById("ckFilterOperational").checked;
+    var onlyPub=document.getElementById("ckFilterPublic").checked;
+    supplyPts=supplyPtsAll.filter(function(s){
+      if(onlyOp&&!s.isOperational) return false;
+      if(onlyPub&&!s.isPublic) return false;
+      return true;
+    });
+    // Rebuild supply layer
+    clearLayer(supplyLayer);
+    var fc={type:"FeatureCollection",features:supplyPts.map(function(s){
+      return{type:"Feature",geometry:{type:"Point",coordinates:[s.lng,s.lat]},
+        properties:{name:s.name,operator:s.operator,speed_tier:s.speedTier,sockets:s.sockets,
+          status:s.status,usage_cost:s.usageCost,postcode:s.postcode,max_power_kw:s.maxPowerKw,
+          connector_types:s.connectorTypes}};
+    })};
+    supplyLayer.addGeoJson(fc);
+    // Recompute
+    computeDistancesToExisting();computeLSOAGapScores();scoreCandidatesShared();
+    var demandPoints=sampleCandidatesForCoverage();
+    baselineMetrics=computeBaselineMetrics(demandPoints);
+    displayBaseline(baselineMetrics);
+    styleLSOA();
+    setStatus("Filter applied: "+supplyPts.length+"/"+supplyPtsAll.length+" chargers active. Re-run comparison to see effect.");
+  }
+
+  // Charger type recommendation per selected site
+  function recommendChargerType(cand){
+    // Look at existing chargers near this candidate
+    var nearbyTypes={slow:0,fast:0,rapid:0};
+    var nearbyKw=0;
+    for(var i=0;i<supplyPts.length;i++){
+      var d=distFast(cand,supplyPts[i]);
+      if(d<2000){ // within 2km
+        var tier=(supplyPts[i].speedTier||"").toLowerCase();
+        nearbyKw+=supplyPts[i].capacityKw||0;
+        if(tier.indexOf("rapid")>=0||tier.indexOf("ultra")>=0) nearbyTypes.rapid++;
+        else if(tier.indexOf("fast")>=0) nearbyTypes.fast++;
+        else nearbyTypes.slow++;
+      }
+    }
+    // Recommendation logic
+    if(nearbyTypes.rapid===0&&nearbyTypes.fast<=2){
+      return {type:"Rapid DC 50-150kW",reason:"No rapid chargers within 2km",color:"#ef4444"};
+    }
+    if(nearbyTypes.rapid===0){
+      return {type:"Rapid DC 50kW",reason:"Fast only nearby, needs DC option",color:"#f59e0b"};
+    }
+    if(nearbyTypes.fast<=1&&nearbyTypes.slow<=2){
+      return {type:"Fast AC 7-22kW",reason:"Low overall density in area",color:"#2563eb"};
+    }
+    if(nearbyKw>0&&nearbyKw<100){
+      return {type:"Fast AC 22kW (multi-bay)",reason:"Low total capacity ("+Math.round(nearbyKw)+" kW nearby)",color:"#2563eb"};
+    }
+    return {type:"Fast AC 7-22kW",reason:"Standard infill",color:"#6b7280"};
   }
 
   // ===============================
@@ -728,8 +804,17 @@
     document.getElementById("shortlistSection").style.display=sel&&sel.length?"block":"none";
     if(!sel||!sel.length)return;
     for(var i=0;i<sel.length;i++){(function(c,idx){
+      var rec=recommendChargerType(c);
       var row=document.createElement("div");row.className="item";
-      row.innerHTML="<div class=\"itemTitle\">"+(idx+1)+". "+escapeHtml(c.name||"Candidate")+"</div><div class=\"itemMeta\"><span class=\"badge\" style=\"border-color:#ef4444\">score "+(c.score||0).toFixed(3)+"</span><span class=\"badge\">LSOA "+escapeHtml(c.lsoaCode||"")+"</span></div>";
+      row.innerHTML="<div class=\"itemTitle\">"+(idx+1)+". "+escapeHtml(c.name||"Candidate")+"</div>"
+        +"<div class=\"itemMeta\">"
+        +"<span class=\"badge\" style=\"border-color:#ef4444\">score "+(c.score||0).toFixed(3)+"</span>"
+        +"<span class=\"badge\">LSOA "+escapeHtml(c.lsoaCode||"")+"</span>"
+        +"</div>"
+        +"<div style=\"margin-top:3px;font-size:10px\">"
+        +"<span style=\"display:inline-block;padding:1px 6px;border-radius:4px;background:"+rec.color+";color:#fff;font-weight:700;font-size:9px\">"+escapeHtml(rec.type)+"</span>"
+        +" <span style=\"color:#6b7280\">"+escapeHtml(rec.reason)+"</span>"
+        +"</div>";
       row.addEventListener("click",function(){focusCandidate(c,label);});el.appendChild(row);
     })(sel[i],i);}
   }
@@ -804,6 +889,7 @@
     document.getElementById("btnExportBest").addEventListener("click",function(){if(planASol)exportCSV(planASol,"best_plan.csv");});
     document.getElementById("btnExportBestGeo").addEventListener("click",function(){if(planASol)exportGeoJSON(planASol,"best_plan.geojson");});
     document.getElementById("btnFindMinP").addEventListener("click",function(){setTimeout(findMinP,50);});
+    document.getElementById("btnApplyFilter").addEventListener("click",function(){applySupplyFilter();});
     document.getElementById("modeNavigate").addEventListener("click",function(){setEditMode("navigate");});
     document.getElementById("modeAdd").addEventListener("click",function(){setEditMode("add");});
     document.getElementById("modeExclude").addEventListener("click",function(){setEditMode("exclude");});
@@ -831,6 +917,7 @@
       supplyPts=[];for(var i=0;i<(supply.features||[]).length;i++){var f=supply.features[i];if(!f.geometry||f.geometry.type!=="Point")continue;var coords=f.geometry.coordinates||[];var lng=coords[0],lat=coords[1];if(typeof lat!=="number"||typeof lng!=="number")continue;if(looksLike27700(lng,lat))continue;var sp=f.properties||{};supplyPts.push(attachRad({lat:lat,lng:lng,sockets:num(getProp(sp,FIELD.sockets,0),0)||1,name:getProp(sp,FIELD.name,""),operator:getProp(sp,FIELD.operator,""),speedTier:getProp(sp,FIELD.speed_tier,"Unknown"),status:getProp(sp,FIELD.status,""),isOperational:getProp(sp,FIELD.is_operational,true),isPublic:getProp(sp,FIELD.is_public,true),usageCost:getProp(sp,FIELD.usage_cost,""),postcode:getProp(sp,FIELD.postcode,""),maxPowerKw:num(getProp(sp,FIELD.max_power_kw,null),NaN),connectorTypes:getProp(sp,FIELD.connector_types,""),hasCCS:!!getProp(sp,FIELD.has_ccs,false),hasChademo:!!getProp(sp,FIELD.has_chademo,false),hasType2:!!getProp(sp,FIELD.has_type2,false),capacityKw:0}));supplyPts[supplyPts.length-1].capacityKw=estimateKW(supplyPts[supplyPts.length-1].speedTier,supplyPts[supplyPts.length-1].maxPowerKw)*supplyPts[supplyPts.length-1].sockets;}
       candPts=[];for(var j=0;j<(candidates.features||[]).length;j++){var f2=candidates.features[j];if(!f2.geometry||f2.geometry.type!=="Point")continue;var coords2=f2.geometry.coordinates||[];var lng2=coords2[0],lat2=coords2[1];if(typeof lat2!=="number"||typeof lng2!=="number")continue;if(looksLike27700(lng2,lat2))continue;var props2=f2.properties||{};var name=getProp(props2,["name","id","site","label","LSOA21NM","LSOA11NM"],"Candidate");var ll=new google.maps.LatLng(lat2,lng2);var rec2=joinPointToLSOA(ll);candPts.push(attachRad({lat:lat2,lng:lng2,name:name,lsoaCode:rec2?rec2.code:"",demandRaw:rec2?num(rec2.demandRaw,1):1,equityRaw:rec2?num(rec2.equityRaw,0):0,penaltyRaw:rec2?num(rec2.penaltyRaw,0):0,gapRaw:0,distToExistingM:NaN,distToExistingSq:Infinity,d01:0,e01:0,g01:0,benefit:0,costBase:0,cost:0,costConstr01:0,costNear01:0,costCluster01:0,scoreBase:0,score:0}));}
       computeLSOAGapScores();styleLSOA();
+      supplyPtsAll=supplyPts.slice(); // backup for filtering
       candPtsOriginal=candPts.slice();
       var candFC={type:"FeatureCollection",features:candPts.map(function(c,i){return{type:"Feature",geometry:{type:"Point",coordinates:[c.lng,c.lat]},properties:{name:c.name||"",_idx:i}};})};
       candLayer.addGeoJson(candFC);refreshCandLayerStyle();updateEditCounts();
