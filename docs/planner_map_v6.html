@@ -251,6 +251,7 @@
     </div>
     <div style="margin:2px 0">
       <span style="display:inline-block;width:10px;height:10px;background:#f59e0b;margin-right:6px;border:1px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,0.12)"></span>Candidates ■ &nbsp;
+      <span class="swatch" style="background:#06b6d4"></span>Auto-fill ◆ &nbsp;
       <span style="display:inline-block;width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:10px solid #10b981;margin-right:6px"></span>Custom ▲ &nbsp;
       <span class="swatch" style="background:#ef4444"></span>Plan A ★ &nbsp;
       <span class="swatch" style="background:#7c3aed"></span>Plan B ◆
@@ -932,6 +933,44 @@
       supplyPts=[];for(var i=0;i<(supply.features||[]).length;i++){var f=supply.features[i];if(!f.geometry||f.geometry.type!=="Point")continue;var coords=f.geometry.coordinates||[];var lng=coords[0],lat=coords[1];if(typeof lat!=="number"||typeof lng!=="number")continue;if(looksLike27700(lng,lat))continue;var sp=f.properties||{};supplyPts.push(attachRad({lat:lat,lng:lng,sockets:num(getProp(sp,FIELD.sockets,0),0)||1,name:getProp(sp,FIELD.name,""),operator:getProp(sp,FIELD.operator,""),speedTier:getProp(sp,FIELD.speed_tier,"Unknown"),status:getProp(sp,FIELD.status,""),isOperational:getProp(sp,FIELD.is_operational,true),isPublic:getProp(sp,FIELD.is_public,true),usageCost:getProp(sp,FIELD.usage_cost,""),postcode:getProp(sp,FIELD.postcode,""),maxPowerKw:num(getProp(sp,FIELD.max_power_kw,null),NaN),connectorTypes:getProp(sp,FIELD.connector_types,""),hasCCS:!!getProp(sp,FIELD.has_ccs,false),hasChademo:!!getProp(sp,FIELD.has_chademo,false),hasType2:!!getProp(sp,FIELD.has_type2,false),capacityKw:0}));supplyPts[supplyPts.length-1].capacityKw=estimateKW(supplyPts[supplyPts.length-1].speedTier,supplyPts[supplyPts.length-1].maxPowerKw)*supplyPts[supplyPts.length-1].sockets;}
       candPts=[];for(var j=0;j<(candidates.features||[]).length;j++){var f2=candidates.features[j];if(!f2.geometry||f2.geometry.type!=="Point")continue;var coords2=f2.geometry.coordinates||[];var lng2=coords2[0],lat2=coords2[1];if(typeof lat2!=="number"||typeof lng2!=="number")continue;if(looksLike27700(lng2,lat2))continue;var props2=f2.properties||{};var name=getProp(props2,["name","id","site","label","LSOA21NM","LSOA11NM"],"Candidate");var siteType=getProp(props2,["site_type","amenity","type"],"");var suitability=num(getProp(props2,["suitability"],0),0);var trafficScore=num(getProp(props2,["traffic_demand_score","traffic_score"],0),0);var ll=new google.maps.LatLng(lat2,lng2);var rec2=joinPointToLSOA(ll);candPts.push(attachRad({lat:lat2,lng:lng2,name:name,siteType:siteType,suitability:suitability,trafficScore:trafficScore,lsoaCode:rec2?rec2.code:"",demandRaw:rec2?num(rec2.demandRaw,1):1,equityRaw:rec2?num(rec2.equityRaw,0):0,penaltyRaw:rec2?num(rec2.penaltyRaw,0):0,gapRaw:0,distToExistingM:NaN,distToExistingSq:Infinity,d01:0,e01:0,g01:0,benefit:0,costBase:0,cost:0,costConstr01:0,costNear01:0,costCluster01:0,scoreBase:0,score:0}));}
       computeLSOAGapScores();styleLSOA();
+
+      // Auto-fill: generate centroid candidates for LSOAs with zero candidates
+      var lsoaCandCount=new Map();
+      for(var ci=0;ci<candPts.length;ci++){
+        var code=candPts[ci].lsoaCode;
+        if(code) lsoaCandCount.set(code,(lsoaCandCount.get(code)||0)+1);
+      }
+      var autoFilled=0;
+      for(var li=0;li<lsoaIndex.length;li++){
+        var rec=lsoaIndex[li];
+        if(lsoaCandCount.get(rec.code)) continue; // already has candidates
+        if(!rec.polygons||!rec.polygons.length) continue;
+        // Compute centroid
+        var poly=rec.polygons[0]; var path=poly.getPath();
+        if(!path||path.getLength()===0) continue;
+        var latS=0,lngS=0,n=path.getLength();
+        for(var pk=0;pk<n;pk++){var pp=path.getAt(pk);latS+=pp.lat();lngS+=pp.lng();}
+        var cLat=latS/n,cLng=lngS/n;
+        candPts.push(attachRad({
+          lat:cLat,lng:cLng,
+          name:"Auto: "+rec.code,
+          siteType:"auto_centroid",
+          suitability:0.5,
+          trafficScore:0,
+          lsoaCode:rec.code,
+          demandRaw:num(rec.demandRaw,1),
+          equityRaw:num(rec.equityRaw,0),
+          penaltyRaw:num(rec.penaltyRaw,0),
+          gapRaw:0,
+          distToExistingM:NaN,distToExistingSq:Infinity,
+          d01:0,e01:0,g01:0,benefit:0,costBase:0,cost:0,
+          costConstr01:0,costNear01:0,costCluster01:0,scoreBase:0,score:0,
+          _autoFill:true
+        }));
+        autoFilled++;
+      }
+      if(autoFilled>0) setStatus("Auto-generated "+autoFilled+" centroid candidates for empty LSOAs.");
+
       supplyPtsAll=supplyPts.slice(); // backup for filtering
       candPtsOriginal=candPts.slice();
       var candFC={type:"FeatureCollection",features:candPts.map(function(c,i){return{type:"Feature",geometry:{type:"Point",coordinates:[c.lng,c.lat]},properties:{name:c.name||"",_idx:i}};})};
@@ -948,7 +987,7 @@
       displayBaseline(baselineMetrics);
       var totalCap=computeTotalCapacityKw();
       map.fitBounds(CARDIFF_BOUNDS);updateCoverageUI();
-      setStatus("Loaded. Supply: "+supplyPts.length+" locations, "+computeSupplyTotal()+" sockets, "+Math.round(totalCap)+" kW\nLSOAs: "+(lsoa.features||[]).length+", Candidates: "+candPts.length+"\nBaseline: "+(baselineMetrics.cov*100).toFixed(1)+"% coverage, avg access "+Math.round(baselineMetrics.avgDist)+"m\n\nSelect methods and click \"\u25b6 Compare Selected\".");
+      setStatus("Loaded. Supply: "+supplyPts.length+" locations, "+computeSupplyTotal()+" sockets, "+Math.round(totalCap)+" kW\nLSOAs: "+(lsoa.features||[]).length+", Candidates: "+candPts.length+(autoFilled>0?" ("+autoFilled+" auto-filled for empty LSOAs)":"")+"\nBaseline: "+(baselineMetrics.cov*100).toFixed(1)+"% coverage, avg access "+Math.round(baselineMetrics.avgDist)+"m\n\nSelect methods and click \"\u25b6 Compare Selected\".");
     }catch(err){console.error(err);setStatus("FAILED.\n"+String(err));alert(String(err));}
   }
 
@@ -1673,6 +1712,10 @@
       }
       if(isCustom){
         return { icon: iconTriangle("#10b981", hov?1.2:1.0), zIndex:720 }; // green triangle = custom
+      }
+      const isAuto = c && c._autoFill;
+      if(isAuto){
+        return { icon: iconDiamond("#06b6d4", hov?0.7:0.55), zIndex:680 }; // cyan diamond = auto-generated centroid
       }
       return { icon: iconSquare("#f59e0b", hov?0.95:0.8, hov?2:1.5), zIndex:700 }; // orange square = candidate
     });
