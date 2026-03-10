@@ -75,6 +75,14 @@ STEPS = [
         "skip_if_exists": "data/processed/candidates_osm_v2.geojson",
     },
     {
+        "name": "Step 6b: Reproject candidates to WGS84",
+        "cmd": [
+            sys.executable, "scripts/reproject_geojson_to_wgs84.py",
+            "--infile", "data/processed/candidates_osm_v2.geojson",
+            "--outfile", "data/processed/candidates_osm_v2_wgs84.geojson",
+        ],
+    },
+    {
         "name": "Step 7: Join DfT traffic data to candidates",
         "cmd": [
             sys.executable, "scripts/join_traffic_to_candidates.py",
@@ -103,6 +111,8 @@ COPY_TO_DOCS = [
      "docs/data/processed/demand_lsoa_cardiff_exact_pop_wgs84_enriched.geojson"),
     ("data/processed/demand_points_cardiff_exact_pop_wgs84.geojson",
      "docs/data/processed/demand_points_cardiff_exact_pop_wgs84.geojson"),
+    ("data/processed/candidates_osm_v2_wgs84.geojson",
+     "docs/data/processed/candidates_osm_v2.geojson"),
 ]
 
 
