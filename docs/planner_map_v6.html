@@ -355,6 +355,7 @@
 
   let lsoaIndex = [], lsoaByCodeMap = new Map();
   let supplyPts = [], candPts = [], candPtsOriginal = [];
+  let demandPts = []; // LSOA centroids for coverage evaluation (separate from candidates)
 
   let activeTab = "main";
   let editMode = "navigate";
@@ -591,8 +592,9 @@
     })};
     supplyLayer.addGeoJson(fc);
     // Recompute
-    computeDistancesToExisting();computeLSOAGapScores();scoreCandidatesShared();
-    var demandPoints=sampleCandidatesForCoverage();
+    computeDistancesToExisting();computeLSOAGapScores();scoreCandidatesShared();computeEquityGroupsFromLSOA();
+    buildDemandPts();
+    var demandPoints=sampleDemandForCoverage();
     baselineMetrics=computeBaselineMetrics(demandPoints);
     displayBaseline(baselineMetrics);
     styleLSOA();
@@ -636,8 +638,9 @@
   function findMinP(){
     setStatus("Finding minimum P for 100% coverage...");
     document.getElementById("minPResult").style.display="none";
-    updateCoverageUI();computeLSOAGapScores();computeDistancesToExisting();scoreCandidatesShared();
-    var demandPoints=sampleCandidatesForCoverage();
+    updateCoverageUI();computeLSOAGapScores();computeDistancesToExisting();scoreCandidatesShared();computeEquityGroupsFromLSOA();
+    buildDemandPts();
+    var demandPoints=sampleDemandForCoverage();
     var thrSq=Math.pow(getCoverageThresholdDistM(),2);
     function checkCov(P){
       var saved=candPts;candPts=saved.filter(function(c){return !excludedSet.has(c);});
@@ -676,7 +679,8 @@
     document.getElementById("k_candidates").textContent=String(candPts.filter(function(c){return !excludedSet.has(c);}).length);
     if(!candPts.length){setStatus("No candidates.");return null;}
     updateCoverageUI();computeLSOAGapScores();computeDistancesToExisting();scoreCandidatesShared();computeEquityGroupsFromLSOA();updateWeightUI();
-    var demandPoints=sampleCandidatesForCoverage();var ws=buildWorstServedCache(demandPoints);
+    buildDemandPts();
+    var demandPoints=sampleDemandForCoverage();var ws=buildWorstServedCache(demandPoints);
     return{P:P,year:year,target:target,supplyTotal:supplyTotal,gap:gap,demandPoints:demandPoints,ws:ws};
   }
 
@@ -925,20 +929,21 @@
       lsoaIndex=(lsoa.features||[]).map(function(f){var props=f.properties||{};var code=getProp(props,FIELD.code,"LSOA");var pop=num(getProp(props,FIELD.pop,null),NaN);var demandRaw=Number.isFinite(pop)?pop:num(getProp(props,FIELD.demand,1),1);var medAge=num(getProp(props,FIELD.median_age,null),NaN);return{code:code,pop:pop,medianAge:medAge,demandRaw:demandRaw,equityRaw:computeEquityFromProps(props,medAge),penaltyRaw:computePenaltyFromProps(props),polygons:makePolygonsFromGeometry(f.geometry),feature:null,supplyRaw:0,gap01:0};});
       lsoaByCodeMap=new Map(lsoaIndex.map(function(r){return[r.code,r];}));
       lsoaLayer.forEach(function(ft){var propsLike={LSOA21CD:ft.getProperty("LSOA21CD"),lsoa21cd:ft.getProperty("lsoa21cd"),LSOA11CD:ft.getProperty("LSOA11CD"),lsoa11cd:ft.getProperty("lsoa11cd"),code:ft.getProperty("code"),id:ft.getProperty("id")};var code=getProp(propsLike,FIELD.code,null);if(code&&lsoaByCodeMap.has(code)){var rec=lsoaByCodeMap.get(code);rec.feature=ft;ft.setProperty("code",rec.code);}});
-      supplyPts=[];for(var i=0;i<(supply.features||[]).length;i++){var f=supply.features[i];if(!f.geometry||f.geometry.type!=="Point")continue;var coords=f.geometry.coordinates||[];var lng=coords[0],lat=coords[1];if(typeof lat!=="number"||typeof lng!=="number")continue;if(looksLike27700(lng,lat)){var wgs=bng2wgs(lng,lat);lng=wgs.lng;lat=wgs.lat;}var sp=f.properties||{};supplyPts.push(attachRad({lat:lat,lng:lng,sockets:num(getProp(sp,FIELD.sockets,0),0)||1,name:getProp(sp,FIELD.name,""),operator:getProp(sp,FIELD.operator,""),speedTier:getProp(sp,FIELD.speed_tier,"Unknown"),status:getProp(sp,FIELD.status,""),isOperational:getProp(sp,FIELD.is_operational,true),isPublic:getProp(sp,FIELD.is_public,true),usageCost:getProp(sp,FIELD.usage_cost,""),postcode:getProp(sp,FIELD.postcode,""),maxPowerKw:num(getProp(sp,FIELD.max_power_kw,null),NaN),connectorTypes:getProp(sp,FIELD.connector_types,""),hasCCS:!!getProp(sp,FIELD.has_ccs,false),hasChademo:!!getProp(sp,FIELD.has_chademo,false),hasType2:!!getProp(sp,FIELD.has_type2,false),capacityKw:0}));supplyPts[supplyPts.length-1].capacityKw=estimateKW(supplyPts[supplyPts.length-1].speedTier,supplyPts[supplyPts.length-1].maxPowerKw)*supplyPts[supplyPts.length-1].sockets;}
-      candPts=[];for(var j=0;j<(candidates.features||[]).length;j++){var f2=candidates.features[j];if(!f2.geometry||f2.geometry.type!=="Point")continue;var coords2=f2.geometry.coordinates||[];var lng2=coords2[0],lat2=coords2[1];if(typeof lat2!=="number"||typeof lng2!=="number")continue;if(looksLike27700(lng2,lat2)){var wgs=bng2wgs(lng2,lat2);lng2=wgs.lng;lat2=wgs.lat;}var props2=f2.properties||{};var name=getProp(props2,["name","id","site","label","LSOA21NM","LSOA11NM"],"Candidate");var siteType=getProp(props2,["site_type","amenity","type"],"");var suitability=num(getProp(props2,["suitability"],0),0);var trafficScore=num(getProp(props2,["traffic_demand_score","traffic_score"],0),0);var ll=new google.maps.LatLng(lat2,lng2);var rec2=joinPointToLSOA(ll);candPts.push(attachRad({lat:lat2,lng:lng2,name:name,siteType:siteType,suitability:suitability,trafficScore:trafficScore,lsoaCode:rec2?rec2.code:"",demandRaw:rec2?num(rec2.demandRaw,1):1,equityRaw:rec2?num(rec2.equityRaw,0):0,penaltyRaw:rec2?num(rec2.penaltyRaw,0):0,gapRaw:0,distToExistingM:NaN,distToExistingSq:Infinity,d01:0,e01:0,g01:0,benefit:0,costBase:0,cost:0,costConstr01:0,costNear01:0,costCluster01:0,scoreBase:0,score:0}));}
+      supplyPts=[];for(var i=0;i<(supply.features||[]).length;i++){var f=supply.features[i];if(!f.geometry||f.geometry.type!=="Point")continue;var coords=f.geometry.coordinates||[];var lng=coords[0],lat=coords[1];if(typeof lat!=="number"||typeof lng!=="number")continue;if(looksLike27700(lng,lat))continue;var sp=f.properties||{};supplyPts.push(attachRad({lat:lat,lng:lng,sockets:num(getProp(sp,FIELD.sockets,0),0)||1,name:getProp(sp,FIELD.name,""),operator:getProp(sp,FIELD.operator,""),speedTier:getProp(sp,FIELD.speed_tier,"Unknown"),status:getProp(sp,FIELD.status,""),isOperational:getProp(sp,FIELD.is_operational,true),isPublic:getProp(sp,FIELD.is_public,true),usageCost:getProp(sp,FIELD.usage_cost,""),postcode:getProp(sp,FIELD.postcode,""),maxPowerKw:num(getProp(sp,FIELD.max_power_kw,null),NaN),connectorTypes:getProp(sp,FIELD.connector_types,""),hasCCS:!!getProp(sp,FIELD.has_ccs,false),hasChademo:!!getProp(sp,FIELD.has_chademo,false),hasType2:!!getProp(sp,FIELD.has_type2,false),capacityKw:0}));supplyPts[supplyPts.length-1].capacityKw=estimateKW(supplyPts[supplyPts.length-1].speedTier,supplyPts[supplyPts.length-1].maxPowerKw)*supplyPts[supplyPts.length-1].sockets;}
+      candPts=[];for(var j=0;j<(candidates.features||[]).length;j++){var f2=candidates.features[j];if(!f2.geometry||f2.geometry.type!=="Point")continue;var coords2=f2.geometry.coordinates||[];var lng2=coords2[0],lat2=coords2[1];if(typeof lat2!=="number"||typeof lng2!=="number")continue;if(looksLike27700(lng2,lat2))continue;var props2=f2.properties||{};var name=getProp(props2,["name","id","site","label","LSOA21NM","LSOA11NM"],"Candidate");var siteType=getProp(props2,["site_type","amenity","type"],"");var suitability=num(getProp(props2,["suitability"],0),0);var trafficScore=num(getProp(props2,["traffic_demand_score","traffic_score"],0),0);var ll=new google.maps.LatLng(lat2,lng2);var rec2=joinPointToLSOA(ll);candPts.push(attachRad({lat:lat2,lng:lng2,name:name,siteType:siteType,suitability:suitability,trafficScore:trafficScore,lsoaCode:rec2?rec2.code:"",demandRaw:rec2?num(rec2.demandRaw,1):1,equityRaw:rec2?num(rec2.equityRaw,0):0,penaltyRaw:rec2?num(rec2.penaltyRaw,0):0,gapRaw:0,distToExistingM:NaN,distToExistingSq:Infinity,d01:0,e01:0,g01:0,benefit:0,costBase:0,cost:0,costConstr01:0,costNear01:0,costCluster01:0,scoreBase:0,score:0}));}
       computeLSOAGapScores();styleLSOA();
       supplyPtsAll=supplyPts.slice(); // backup for filtering
       candPtsOriginal=candPts.slice();
       var candFC={type:"FeatureCollection",features:candPts.map(function(c,i){return{type:"Feature",geometry:{type:"Point",coordinates:[c.lng,c.lat]},properties:{name:c.name||"",_idx:i}};})};
       candLayer.addGeoJson(candFC);refreshCandLayerStyle();updateEditCounts();
       computeDistancesToExisting();scoreCandidatesShared();computeEquityGroupsFromLSOA();
+      buildDemandPts(); // Build LSOA centroid demand points for coverage evaluation
       var year=String(document.getElementById("yearSel").value||"2030");var supplyTotal=computeSupplyTotal();
       document.getElementById("k_supply").textContent=String(Math.round(supplyTotal));
       document.getElementById("k_target").textContent=String(Math.round(num(TARGET_BY_YEAR[year],1500)));
       document.getElementById("k_gap").textContent="\u2013";
       document.getElementById("k_candidates").textContent=String(candPts.length);
-      var demandPoints=sampleCandidatesForCoverage();
+      var demandPoints=sampleDemandForCoverage();
       baselineMetrics=computeBaselineMetrics(demandPoints);
       displayBaseline(baselineMetrics);
       var totalCap=computeTotalCapacityKw();
@@ -975,29 +980,6 @@
     return await res.json();
   }
   function looksLike27700(lng, lat){ return Math.abs(lng) > 1000 || Math.abs(lat) > 1000; }
-  // Approximate BNG (EPSG:27700) → WGS84 conversion for browser use
-  function bng2wgs(e, n){
-    // Helmert approximation — accurate to ~5m for Cardiff area
-    var a=6377563.396,b=6356256.909,e2=(a*a-b*b)/(a*a);
-    var n0=-100000,e0=400000,f0=0.9996012717,phi0=49*Math.PI/180,lam0=-2*Math.PI/180;
-    var dN=n-n0,dE=e-e0;
-    var phi=phi0+dN/(a*f0);
-    for(var i=0;i<10;i++){
-      var M=b*f0*(1.0016764*phi-1.0016764*phi0-0.0025174*Math.sin(2*phi)+0.0000026*Math.sin(4*phi));
-      phi=phi+(dN-M)/(a*f0);
-    }
-    var sp=Math.sin(phi),cp=Math.cos(phi),tp=Math.tan(phi);
-    var v=a*f0/Math.sqrt(1-e2*sp*sp);
-    var rho=a*f0*(1-e2)/Math.pow(1-e2*sp*sp,1.5);
-    var eta2=v/rho-1;
-    var VII=tp/(2*rho*v),VIII=tp/(24*rho*v*v*v)*(5+3*tp*tp+eta2);
-    var IX=tp/(720*rho*Math.pow(v,5))*(61+90*tp*tp+45*tp*tp*tp*tp);
-    var X=1/(cp*v),XI=1/(cp*6*v*v*v)*(v/rho+2*tp*tp);
-    var XII=1/(cp*120*Math.pow(v,5))*(5+28*tp*tp+24*tp*tp*tp*tp);
-    var lat=(phi-VII*dE*dE+VIII*Math.pow(dE,4)-IX*Math.pow(dE,6))*180/Math.PI;
-    var lng=(lam0+X*dE-XI*Math.pow(dE,3)+XII*Math.pow(dE,5))*180/Math.PI;
-    return {lat:lat,lng:lng};
-  }
 
   function attachRad(p){
     p.latRad = p.lat * DEG2RAD;
@@ -1177,13 +1159,62 @@
 // 6) COVERAGE & METRICS
   // ===============================
   function getCoverageSampleN(){ return Math.max(200,Math.floor(num(document.getElementById("covSampleN").value,900))); }
-  function sampleCandidatesForCoverage(){
-    const N=candPts.length, want=Math.min(getCoverageSampleN(),N);
-    if(want>=N) return candPts;
-    const step=Math.max(1,Math.floor(N/want)); const out=[];
-    for(let i=0;i<N&&out.length<want;i+=step) out.push(candPts[i]);
-    while(out.length<want) out.push(candPts[out.length%N]);
+
+  // Build demand evaluation points from LSOA polygon centroids
+  function buildDemandPts(){
+    demandPts=[];
+    for(var i=0;i<lsoaIndex.length;i++){
+      var rec=lsoaIndex[i];
+      if(!rec.polygons||!rec.polygons.length) continue;
+      // Compute centroid from first polygon
+      var poly=rec.polygons[0]; var path=poly.getPath();
+      if(!path||path.getLength()===0) continue;
+      var latS=0,lngS=0,n=path.getLength();
+      for(var k=0;k<n;k++){var p=path.getAt(k);latS+=p.lat();lngS+=p.lng();}
+      var cLat=latS/n,cLng=lngS/n;
+      demandPts.push(attachRad({
+        lat:cLat,lng:cLng,
+        lsoaCode:rec.code,
+        demandRaw:num(rec.demandRaw,1),
+        equityRaw:num(rec.equityRaw,0),
+        penaltyRaw:num(rec.penaltyRaw,0),
+        e01:0, equityGroup:3,
+        distToExistingM:NaN, distToExistingSq:Infinity
+      }));
+    }
+    // Compute distances to existing chargers for demand points
+    if(supplyPts.length){
+      for(var j=0;j<demandPts.length;j++){
+        var dp=demandPts[j]; var bestSq=Infinity;
+        for(var s=0;s<supplyPts.length;s++){
+          var dSq=distSqFast(dp,supplyPts[s]);
+          if(dSq<bestSq) bestSq=dSq;
+        }
+        dp.distToExistingSq=bestSq;
+        dp.distToExistingM=Number.isFinite(bestSq)?Math.sqrt(bestSq):NaN;
+      }
+    }
+    // Assign equity groups
+    var eN=normalize01(demandPts.map(function(d){return d.equityRaw;}));
+    for(var m=0;m<demandPts.length;m++){
+      demandPts[m].e01=eN.norm(num(demandPts[m].equityRaw,0));
+      var rec2=lsoaByCodeMap.get(demandPts[m].lsoaCode);
+      demandPts[m].equityGroup=rec2?rec2.equityGroup:3;
+    }
+  }
+
+  function sampleDemandForCoverage(){
+    var N=demandPts.length, want=Math.min(getCoverageSampleN(),N);
+    if(want>=N) return demandPts;
+    var step=Math.max(1,Math.floor(N/want)); var out=[];
+    for(var i=0;i<N&&out.length<want;i+=step) out.push(demandPts[i]);
+    while(out.length<want) out.push(demandPts[out.length%N]);
     return out;
+  }
+
+  // Keep old function for candidate scoring (distToExisting for candidates)
+  function sampleCandidatesForCoverage(){
+    return sampleDemandForCoverage();
   }
   function computeDistancesToExisting(){
     if(!supplyPts.length){ for(const c of candPts){c.distToExistingM=NaN;c.distToExistingSq=Infinity;} return; }
@@ -1202,13 +1233,16 @@
     const nearN=normalize01(nearArr);
     const w=getWeights();
     const wt=num(document.getElementById("wTraffic")?document.getElementById("wTraffic").value:0,0);
+    // Normalize benefit weights (demand + gap + traffic) to sum to 1
+    const sumBen=w.wd+w.wg+wt;
+    const nwd=sumBen>0?w.wd/sumBen:0.5, nwg=sumBen>0?w.wg/sumBen:0.35, nwt=sumBen>0?wt/sumBen:0;
     for(let i=0;i<candPts.length;i++){
       const c=candPts[i];
       c.d01=dN.norm(num(c.demandRaw,0)); c.e01=eN.norm(num(c.equityRaw,0));
       c.g01=gN.norm(num(c.gapRaw,0)); c.costConstr01=constrN.norm(num(c.penaltyRaw,0));
       c.t01=tN.norm(num(c.trafficScore||0,0));
       c.costNear01=nearN.norm(nearArr[i]); c.costCluster01=0;
-      c.benefit=w.wd*c.d01+w.wg*c.g01+wt*c.t01; c.costBase=(w.wp*c.costConstr01+w.wn*c.costNear01);
+      c.benefit=nwd*c.d01+nwg*c.g01+nwt*c.t01; c.costBase=(w.wp*c.costConstr01+w.wn*c.costNear01);
       c.scoreBase=c.benefit-c.costBase; c.score=c.scoreBase;
     }
   }
@@ -1333,8 +1367,13 @@
       let bestSq=Infinity;for(const s of sel){const d=distSqFast(c,s);if(d<bestSq)bestSq=d;}
       if(Math.min(exSq,bestSq)<=thrSq) covered[g]+=w;
     }
-    const q1=total[1]>0?covered[1]/total[1]:NaN, q5=total[5]>0?covered[5]/total[5]:NaN;
-    return {q1,q5,diff:(Number.isFinite(q1)&&Number.isFinite(q5))?(q5-q1):NaN};
+    // Group 5 = highest need = most deprived; Group 1 = lowest need = least deprived
+    // WIMD convention: Q5 = least deprived, Q1 = most deprived
+    // diff = least_deprived_cov - most_deprived_cov
+    // positive = inequitable (rich have better access), negative = pro-equity
+    const mostDeprived=total[5]>0?covered[5]/total[5]:NaN;
+    const leastDeprived=total[1]>0?covered[1]/total[1]:NaN;
+    return {q1:mostDeprived,q5:leastDeprived,diff:(Number.isFinite(mostDeprived)&&Number.isFinite(leastDeprived))?(leastDeprived-mostDeprived):NaN};
   }
 
   // ---- NEW: Continuous (non-saturating) KPIs ----
