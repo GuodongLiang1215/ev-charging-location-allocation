@@ -223,16 +223,18 @@
 
   <div class="legend">
     <b>Legend</b><br/>
-    <div style="margin:3px 0"><b style="font-size:10px">Charger speed:</b>
+    <div style="margin:3px 0"><b style="font-size:10px">Existing chargers ⚡ (by speed):</b>
       <span class="swatch" style="background:#6b7280"></span>Slow &nbsp;
       <span class="swatch" style="background:#2563eb"></span>Fast &nbsp;
       <span class="swatch" style="background:#f59e0b"></span>Rapid &nbsp;
       <span class="swatch" style="background:#ef4444"></span>Ultra-Rapid
     </div>
-    <span class="swatch" style="background:#f59e0b"></span>Candidates &nbsp;
-    <span class="swatch" style="background:#10b981"></span>Custom &nbsp;
-    <span class="swatch" style="background:#ef4444"></span>Plan A ★ &nbsp;
-    <span class="swatch" style="background:#7c3aed"></span>Plan B ◆
+    <div style="margin:2px 0">
+      <span style="display:inline-block;width:10px;height:10px;background:#f59e0b;margin-right:6px;border:1px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,0.12)"></span>Candidates ■ &nbsp;
+      <span style="display:inline-block;width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:10px solid #10b981;margin-right:6px"></span>Custom ▲ &nbsp;
+      <span class="swatch" style="background:#ef4444"></span>Plan A ★ &nbsp;
+      <span class="swatch" style="background:#7c3aed"></span>Plan B ◆
+    </div>
   </div>
 </div>
 
@@ -772,7 +774,7 @@
     info=new google.maps.InfoWindow();
     supplyLayer=new google.maps.Data({map});lsoaLayer=new google.maps.Data({map});candLayer=new google.maps.Data({map});
     planALayer=new google.maps.Data({map});planBLayer=new google.maps.Data({map});
-    supplyLayer.setStyle(function(ft){var h=!!ft.getProperty("_hover");var tier=ft.getProperty("speed_tier")||"Unknown";var col=speedColor(tier);var sz=h?10:7;if(tier.indexOf("Rapid")>=0||tier.indexOf("Ultra")>=0)sz=h?12:9;return{icon:iconCircle(col,sz,h?4:2),zIndex:800};});
+    supplyLayer.setStyle(function(ft){var h=!!ft.getProperty("_hover");var tier=ft.getProperty("speed_tier")||"Unknown";var col=speedColor(tier);var sz=h?1.1:0.85;if(tier.indexOf("Rapid")>=0||tier.indexOf("Ultra")>=0)sz=h?1.3:1.05;return{icon:iconBolt(col,sz),zIndex:800};});
     planALayer.setStyle(function(ft){var h=!!ft.getProperty("_hover");return{icon:iconStar("#ef4444",h?1.35:1.15),zIndex:9999};});
     planBLayer.setStyle(function(ft){var h=!!ft.getProperty("_hover");return{icon:iconDiamond("#7c3aed",h?1.0:0.85),zIndex:9998};});
     function addHover(layer){layer.addListener("mouseover",function(e){e.feature.setProperty("_hover",true);});layer.addListener("mouseout",function(e){e.feature.setProperty("_hover",false);});}
@@ -925,6 +927,22 @@
   function iconDiamond(fill, scale){
     return { path:"M 0,-10 L 10,0 L 0,10 L -10,0 Z",
       fillColor:fill, fillOpacity:0.95, strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:1, scale:scale };
+  }
+  // Lightning bolt for existing chargers
+  function iconBolt(fill, scale){
+    return { path:"M -2,-10 L 4,-10 L 1,-2 L 6,-2 L -3,10 L 0,1 L -5,1 Z",
+      fillColor:fill, fillOpacity:0.95, strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:1.2, scale:scale,
+      anchor: new google.maps.Point(0, 0) };
+  }
+  // Small square for candidates
+  function iconSquare(fill, scale, strokeW){
+    return { path:"M -5,-5 L 5,-5 L 5,5 L -5,5 Z",
+      fillColor:fill, fillOpacity:0.9, strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:strokeW, scale:scale };
+  }
+  // Triangle for custom added sites
+  function iconTriangle(fill, scale){
+    return { path:"M 0,-8 L 7,6 L -7,6 Z",
+      fillColor:fill, fillOpacity:0.95, strokeColor:"#ffffff", strokeOpacity:1, strokeWeight:1.5, scale:scale };
   }
 
   // ===============================
@@ -1483,15 +1501,15 @@
       const isLocked = c && lockedSet.has(c);
 
       if(isExcluded){
-        return { icon: iconCircle("#d1d5db", hov?6:5, 1), zIndex:600 }; // grey
+        return { icon: iconCircle("#d1d5db", hov?5:4, 1), zIndex:600 }; // grey circle = excluded
       }
       if(isLocked){
-        return { icon: iconCircle("#f59e0b", hov?9:8, hov?4:3), zIndex:750 }; // gold, larger
+        return { icon: iconSquare("#f59e0b", hov?1.3:1.1, hov?3:2), zIndex:750 }; // gold square = locked
       }
       if(isCustom){
-        return { icon: iconCircle("#10b981", hov?8:7, hov?4:3), zIndex:720 }; // green
+        return { icon: iconTriangle("#10b981", hov?1.2:1.0), zIndex:720 }; // green triangle = custom
       }
-      return { icon: iconCircle("#f59e0b", hov?7:6, hov?3:2), zIndex:700 }; // default orange
+      return { icon: iconSquare("#f59e0b", hov?0.95:0.8, hov?2:1.5), zIndex:700 }; // orange square = candidate
     });
   }
 
