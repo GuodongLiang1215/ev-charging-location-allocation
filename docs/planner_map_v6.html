@@ -152,11 +152,21 @@
   <div id="gapPanel" style="display:none">
     <div class="section">
       <div style="font-weight:800;font-size:13px;margin-bottom:4px">Gap Map — Underserved LSOAs</div>
-      <div class="muted">Continuous gradient. Zoom in (≥13) to see population &amp; gap labels.</div>
+      <div class="muted">Colour = demand−supply gap. Opacity = population weight. Hover LSOA for details.</div>
       <div style="margin-top:6px;display:flex;align-items:center;gap:4px">
         <span style="display:inline-block;width:100px;height:12px;background:linear-gradient(to right,#10b981,#84cc16,#eab308,#f97316,#ef4444);border-radius:3px"></span>
         <span class="muted">Low gap → High gap</span>
       </div>
+      <div class="row">
+        <label class="small" style="min-width:80px">Gap filter ≥</label>
+        <input id="gapThreshold" type="range" min="0" max="100" step="5" value="0" style="flex:1">
+        <span class="badge" id="gapThresholdVal">0%</span>
+      </div>
+      <div class="row">
+        <label class="small"><input id="ckGapLabels" type="checkbox"> Show labels (zoom≥14)</label>
+        <label class="small"><input id="ckGapCovCircles" type="checkbox"> Coverage circles</label>
+      </div>
+      <div id="gapStats" class="muted" style="margin-top:4px"></div>
     </div>
   </div>
 
@@ -337,8 +347,10 @@
   }
 
   // ===============================
-  // 4) TABS & GAP MAP (v6: continuous gradient + zoom labels)
+  // 4) TABS & GAP MAP (v6: improved with filtering, pop-weighted opacity, coverage circles)
   // ===============================
+  let covCircles = [];
+
   function setTab(tab){
     activeTab=tab;
     document.getElementById("tabMain").classList.toggle("active",tab==="main");
@@ -347,8 +359,10 @@
     document.getElementById("mainPanel").style.display=(tab==="main")?"block":"none";
     document.getElementById("gapPanel").style.display=(tab==="gap")?"block":"none";
     document.getElementById("editPanel").style.display=(tab==="edit")?"block":"none";
-    styleLSOA(); updateLSOALabels();
+    styleLSOA(); updateLSOALabels(); updateCovCircles(); updateGapStats();
   }
+  function getGapThreshold(){ return num(document.getElementById("gapThreshold").value,0)/100; }
+
   function gapColor(g){
     const stops=[[0,16,185,129],[0.25,132,204,22],[0.5,234,179,8],[0.75,249,115,22],[1.0,239,68,68]];
     const gc=Math.max(0,Math.min(1,g));
@@ -363,40 +377,90 @@
     }
     return "rgb(239,68,68)";
   }
+
   function styleLSOA(){
     if(!lsoaLayer) return;
     if(activeTab==="gap"){
+      var thr=getGapThreshold();
+      var maxPop=1;
+      for(var i=0;i<lsoaIndex.length;i++){
+        if(Number.isFinite(lsoaIndex[i].pop)&&lsoaIndex[i].pop>maxPop) maxPop=lsoaIndex[i].pop;
+      }
       lsoaLayer.setStyle(function(ft){
         var s=num(ft.getProperty("_gapScore"),0);
-        return {fillColor:gapColor(s),fillOpacity:0.55,strokeColor:"#374151",strokeOpacity:0.5,strokeWeight:1.5};
+        var pop=num(ft.getProperty("population")||ft.getProperty("pop"),0);
+        var popFactor=maxPop>0?Math.max(0.25,Math.min(1.0,pop/maxPop)):0.5;
+        if(s<thr){
+          return {fillColor:"#d1d5db",fillOpacity:0.08,strokeColor:"#9ca3af",strokeOpacity:0.15,strokeWeight:0.5};
+        }
+        return {fillColor:gapColor(s),fillOpacity:0.15+0.50*popFactor,strokeColor:"#374151",strokeOpacity:0.3+0.4*s,strokeWeight:1+s*1.5};
       });
     } else {
       lsoaLayer.setStyle({fillColor:"#93c5fd",fillOpacity:0.15,strokeColor:"#2563eb",strokeOpacity:0.7,strokeWeight:1.5});
     }
   }
+
   function updateLSOALabels(){
     for(var i=0;i<lsoaLabels.length;i++) lsoaLabels[i].setMap(null);
     lsoaLabels=[];
     if(activeTab!=="gap"||!map) return;
+    if(!document.getElementById("ckGapLabels").checked) return;
     var zoom=map.getZoom();
-    if(zoom<13) return;
+    if(zoom<14) return;
+    var thr=getGapThreshold();
+    var bounds=map.getBounds();
     for(var j=0;j<lsoaIndex.length;j++){
       var rec=lsoaIndex[j];
       if(!rec.polygons||!rec.polygons.length) continue;
+      if(rec.gap01<thr) continue;
       var poly=rec.polygons[0]; var path=poly.getPath();
       if(!path||path.getLength()===0) continue;
       var latS=0,lngS=0,n=path.getLength();
       for(var k=0;k<n;k++){var p=path.getAt(k);latS+=p.lat();lngS+=p.lng();}
+      var cLat=latS/n,cLng=lngS/n;
+      if(bounds&&!bounds.contains({lat:cLat,lng:cLng})) continue;
       var pop=Number.isFinite(rec.pop)?Math.round(rec.pop):"?";
       var gap=(rec.gap01*100).toFixed(0);
+      var labelColor=rec.gap01>0.5?"#991b1b":rec.gap01>0.25?"#92400e":"#374151";
       var marker=new google.maps.Marker({
-        position:{lat:latS/n,lng:lngS/n}, map:map,
+        position:{lat:cLat,lng:cLng}, map:map,
         icon:{path:google.maps.SymbolPath.CIRCLE,scale:0},
-        label:{text:"Pop "+pop+"\nGap "+gap+"%",fontSize:zoom>=15?"11px":"9px",fontWeight:"700",color:"#1f2937"},
+        label:{text:pop+" \u00b7 "+gap+"%",fontSize:zoom>=16?"11px":"9px",fontWeight:"700",color:labelColor},
         clickable:false
       });
       lsoaLabels.push(marker);
     }
+  }
+
+  function updateCovCircles(){
+    for(var i=0;i<covCircles.length;i++) covCircles[i].setMap(null);
+    covCircles=[];
+    if(activeTab!=="gap"||!map) return;
+    if(!document.getElementById("ckGapCovCircles").checked) return;
+    var radiusM=getCoverageThresholdDistM();
+    for(var j=0;j<supplyPts.length;j++){
+      var s=supplyPts[j];
+      covCircles.push(new google.maps.Circle({
+        center:{lat:s.lat,lng:s.lng}, radius:radiusM,
+        fillColor:"#2563eb",fillOpacity:0.06,
+        strokeColor:"#2563eb",strokeOpacity:0.22,strokeWeight:1,
+        map:map, clickable:false
+      }));
+    }
+  }
+
+  function updateGapStats(){
+    var el=document.getElementById("gapStats");
+    if(!el||activeTab!=="gap"||!lsoaIndex.length){if(el)el.textContent="";return;}
+    var thr=getGapThreshold();
+    var total=lsoaIndex.length,above=0,totalPop=0,abovePop=0,critical=0;
+    for(var i=0;i<lsoaIndex.length;i++){
+      var r=lsoaIndex[i]; var pop=Number.isFinite(r.pop)?r.pop:0; totalPop+=pop;
+      if(r.gap01>=thr){above++;abovePop+=pop;if(r.gap01>=0.5)critical++;}
+    }
+    el.textContent=above+" of "+total+" LSOAs ("+(total>0?(above/total*100).toFixed(0):"0")+"%) above threshold, "
+      +(totalPop>0?(abovePop/totalPop*100).toFixed(0):"0")+"% of population."
+      +(critical>0?" "+critical+" critical (\u226550% gap).":"");
   }
 
   // ===============================
@@ -666,7 +730,7 @@
     supplyLayer.addListener("click",function(e){_ptGuard=true;setTimeout(function(){_ptGuard=false;},150);if(editMode!=="navigate")return;var ft=e.feature;info.setContent("<b>Existing charger</b><br/>"+escapeHtml(ft.getProperty("name")||ft.getProperty("operator")||"")+"<br/>Sockets: "+(ft.getProperty("sockets")||ft.getProperty("SocketCount")||"?"));info.setPosition(e.latLng);info.open({map:map});});
     planALayer.addListener("click",function(e){_ptGuard=true;setTimeout(function(){_ptGuard=false;},150);var ft=e.feature;var lat=e.latLng.lat(),lng=e.latLng.lng();if(editMode==="exclude"){var c=findCandByLatLng(lat,lng);if(c)toggleExclude(c);return;}if(editMode==="lock"){var c2=findCandByLatLng(lat,lng);if(c2)toggleLock(c2);return;}info.setContent("<b>"+escapeHtml(ft.getProperty("plan")||"Plan A")+"</b><br/>#"+ft.getProperty("rank")+" "+escapeHtml(ft.getProperty("name")||"")+"<br/>Score: "+num(ft.getProperty("score"),0).toFixed(3));info.setPosition(e.latLng);info.open({map:map});});
     planBLayer.addListener("click",function(e){_ptGuard=true;setTimeout(function(){_ptGuard=false;},150);var ft=e.feature;var lat=e.latLng.lat(),lng=e.latLng.lng();if(editMode==="exclude"){var c=findCandByLatLng(lat,lng);if(c)toggleExclude(c);return;}if(editMode==="lock"){var c2=findCandByLatLng(lat,lng);if(c2)toggleLock(c2);return;}info.setContent("<b>"+escapeHtml(ft.getProperty("plan")||"Plan B")+"</b><br/>#"+ft.getProperty("rank")+" "+escapeHtml(ft.getProperty("name")||"")+"<br/>Score: "+num(ft.getProperty("score"),0).toFixed(3));info.setPosition(e.latLng);info.open({map:map});});
-    lsoaLayer.addListener("click",function(e){if(editMode!=="navigate")return;var ft=e.feature;var code=ft.getProperty("LSOA21CD")||ft.getProperty("lsoa21cd")||ft.getProperty("code")||"";var gap=num(ft.getProperty("_gapScore"),NaN);var pop=num(ft.getProperty("population")||ft.getProperty("pop"),NaN);info.setContent("<b>LSOA: "+escapeHtml(code)+"</b><br/>Pop: "+(Number.isFinite(pop)?Math.round(pop):"n/a")+"<br/>Gap: "+(Number.isFinite(gap)?gap.toFixed(3):"n/a"));info.setPosition(e.latLng);info.open({map:map});});
+    lsoaLayer.addListener("click",function(e){if(editMode!=="navigate")return;var ft=e.feature;var code=ft.getProperty("LSOA21CD")||ft.getProperty("lsoa21cd")||ft.getProperty("code")||"";var gap=num(ft.getProperty("_gapScore"),NaN);var pop=num(ft.getProperty("population")||ft.getProperty("pop"),NaN);var rec=lsoaByCodeMap.get(code);var supply=rec?num(rec.supplyRaw,0):0;var demand=rec?num(rec.demandRaw,0):0;var equity=rec?num(rec.equityRaw,0):0;var gapPct=Number.isFinite(gap)?(gap*100).toFixed(0)+"%":"n/a";var gapBar=Number.isFinite(gap)?("<div style='margin:4px 0;height:8px;width:100%;background:#e5e7eb;border-radius:4px'><div style='height:100%;width:"+(gap*100)+"%;background:"+gapColor(gap)+";border-radius:4px'></div></div>"):"";info.setContent("<b style='font-size:13px'>LSOA: "+escapeHtml(code)+"</b>"+gapBar+"<table style='font-size:12px;margin-top:4px'><tr><td style='padding-right:12px;color:#6b7280'>Population</td><td style='font-weight:700'>"+(Number.isFinite(pop)?Math.round(pop).toLocaleString():"n/a")+"</td></tr><tr><td style='color:#6b7280'>Gap score</td><td style='font-weight:700;color:"+(gap>0.5?"#dc2626":gap>0.25?"#d97706":"#059669")+"'>"+gapPct+"</td></tr><tr><td style='color:#6b7280'>Existing supply</td><td style='font-weight:700'>"+supply+" sockets</td></tr><tr><td style='color:#6b7280'>Demand weight</td><td>"+demand.toFixed(0)+"</td></tr></table>");info.setPosition(e.latLng);info.open({map:map});});
     candLayer.addListener("click",function(e){_ptGuard=true;setTimeout(function(){_ptGuard=false;},150);var ft=e.feature;var idx=ft.getProperty("_idx");var c=(idx!==undefined&&idx<candPts.length)?candPts[idx]:null;if(editMode==="exclude"&&c){toggleExclude(c);return;}if(editMode==="lock"&&c){toggleLock(c);return;}if(editMode==="navigate"&&c){var isEx=excludedSet.has(c)?" [EXCLUDED]":"";var isLk=lockedSet.has(c)?" [LOCKED]":"";info.setContent("<b>Candidate"+isEx+isLk+"</b><br/>Name: "+escapeHtml(c.name||"")+"<br/>LSOA: "+escapeHtml(c.lsoaCode||"")+"<br/>Score: "+(c.scoreBase||0).toFixed(3)+(c._custom?"<br/><i>Custom</i>":""));info.setPosition(e.latLng);info.open({map:map});}});
     map.addListener("click",function(e){var lat=e.latLng.lat(),lng=e.latLng.lng();if(editMode==="add"){if(_ptGuard)return;if(lat<CARDIFF_BOUNDS.south||lat>CARDIFF_BOUNDS.north||lng<CARDIFF_BOUNDS.west||lng>CARDIFF_BOUNDS.east){setStatus("Outside Cardiff bounds.");return;}addCustomCandidate(lat,lng);return;}if(editMode==="exclude"||editMode==="lock"){if(_ptGuard)return;var idx=findCandIdxNearClick(lat,lng);if(idx>=0){var c=candPts[idx];if(editMode==="exclude")toggleExclude(c);else toggleLock(c);}else setStatus("No candidate nearby.");}});
     map.addListener("zoom_changed",function(){if(activeTab==="gap")updateLSOALabels();});
@@ -692,6 +756,15 @@
     document.getElementById("modeLock").addEventListener("click",function(){setEditMode("lock");});
     document.getElementById("btnResetEdits").addEventListener("click",function(){resetEdits();previousRunSnapshot=null;document.getElementById("editDeltaSection").style.display="none";});
     document.getElementById("covMode").addEventListener("change",updateCoverageUI);
+
+    // Gap map controls
+    document.getElementById("gapThreshold").addEventListener("input",function(){
+      document.getElementById("gapThresholdVal").textContent=this.value+"%";
+      styleLSOA();updateLSOALabels();updateGapStats();
+    });
+    document.getElementById("ckGapLabels").addEventListener("change",function(){updateLSOALabels();});
+    document.getElementById("ckGapCovCircles").addEventListener("change",function(){updateCovCircles();});
+    map.addListener("bounds_changed",function(){if(activeTab==="gap"&&document.getElementById("ckGapLabels").checked)updateLSOALabels();});
 
     try{
       setStatus("Loading GeoJSON...");
