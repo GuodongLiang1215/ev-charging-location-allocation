@@ -285,6 +285,58 @@
   let worstCache = { set: new Set(), codes: [], currentAgg: new Map(), pct: 20 };
 
   // ===============================
+  // 1b) KPI INFRASTRUCTURE (must precede features)
+  // ===============================
+  function fmtPct(v){ return Number.isFinite(v)? (v*100).toFixed(1)+"%" : "–"; }
+  function fmtPP(v){ return Number.isFinite(v)? (v*100).toFixed(1)+" pp" : "–"; }
+  function fmtNum(v,d=1){ return Number.isFinite(v)? v.toFixed(d) : "–"; }
+  function fmtInt(v){ return Number.isFinite(v)? String(Math.round(v)) : "–"; }
+  function fmtSigma(kpi, sigma){
+    if(!Number.isFinite(sigma) || sigma < 1e-6) return null;
+    if(kpi.fmt === fmtPct) return (sigma*100).toFixed(1);
+    if(kpi.fmt === fmtPP)  return (sigma*100).toFixed(1);
+    if(kpi.fmt === fmtInt) return String(Math.round(sigma));
+    return sigma.toFixed(3);
+  }
+
+  const KPI_DEFS = [
+    { name:"Coverage",                key:"cov",       fmt:fmtPct, higherIsBetter:true },
+    { name:"Worst-served min improve", key:"wsMin",    fmt:fmtPP,  higherIsBetter:true },
+    { name:"Worst-served avg improve", key:"wsAvg",    fmt:fmtPP,  higherIsBetter:true },
+    { name:"Avg score",               key:"avgScore",  fmt:v=>fmtNum(v,3), higherIsBetter:true },
+    { name:"Avg dist to existing (m)", key:"dex",      fmt:fmtInt, higherIsBetter:true },
+    { name:"Redundancy (avg nearest m)", key:"red",    fmt:fmtInt, higherIsBetter:true },
+    { name:"Equity-weighted coverage", key:"eqCov",    fmt:fmtPct, higherIsBetter:true },
+    { name:"Equity disparity (Q5−Q1)", key:"eqDisp",   fmt:fmtPP,  higherIsBetter:false },
+    { name:"Demand-wtd avg access (m)", key:"dwAvgDist", fmt:fmtInt, higherIsBetter:false },
+    { name:"P90 access distance (m)",  key:"p90Access",  fmt:fmtInt, higherIsBetter:false },
+    { name:"Max access distance (m)",  key:"maxAccess",  fmt:fmtInt, higherIsBetter:false },
+  ];
+
+  function pickBestFromMetrics(entriesArr){
+    const scores = entriesArr.map(()=>0);
+    const EPS = 1e-6;
+    for(const kpi of KPI_DEFS){
+      const vals = entriesArr.map(e => e.metrics ? e.metrics[kpi.key] : NaN);
+      const finite = vals.filter(Number.isFinite);
+      if(!finite.length) continue;
+      const allEqual = finite.every(v => Math.abs(v - finite[0]) < EPS);
+      if(allEqual) continue;
+      let bestIdx=-1, bestVal=kpi.higherIsBetter?-Infinity:Infinity;
+      for(let i=0;i<vals.length;i++){
+        if(!Number.isFinite(vals[i]))continue;
+        if(kpi.higherIsBetter?(vals[i]>bestVal+EPS):(vals[i]<bestVal-EPS)){bestVal=vals[i];bestIdx=i;}
+      }
+      if(bestIdx>=0) scores[bestIdx]++;
+    }
+    const maxScore = Math.max(...scores);
+    const winners = scores.reduce((acc,s,i) => s===maxScore ? acc.concat(i) : acc, []);
+    const isTie = (maxScore === 0) || (winners.length > 1);
+    const bestIdx = isTie ? (entriesArr.length - 1) : winners[0];
+    return { bestIdx, isTie, scores };
+  }
+
+  // ===============================
   // 4) TABS & GAP MAP (v6: continuous gradient + zoom labels)
   // ===============================
   function setTab(tab){
@@ -1073,62 +1125,6 @@
     return Math.sqrt(sqDiffs.reduce((a,b)=>a+b,0)/(arr.length-1));
   }
 
-  // Format σ values appropriately for each KPI type
-  function fmtSigma(kpi, sigma){
-    if(!Number.isFinite(sigma) || sigma < 1e-6) return null;
-    // Match the scale of the main formatter
-    if(kpi.fmt === fmtPct) return (sigma*100).toFixed(1);      // σ of 0.003 → "0.3"
-    if(kpi.fmt === fmtPP)  return (sigma*100).toFixed(1);      // σ of 0.012 → "1.2"
-    if(kpi.fmt === fmtInt) return String(Math.round(sigma));   // σ of 42.3 → "42"
-    // default: match the main format's decimal places
-    return sigma.toFixed(3);
-  }
-
-  // Render comparison table that supports both single-run and multi-run entries
-  // Each entry: { label, metrics, stdMetrics? (if multi-run) }
-  function renderComparisonTableV2(tbodyId, entries, kpiDefs){
-    const tbody = document.getElementById(tbodyId);
-    tbody.innerHTML = "";
-    const EPS = 1e-6;
-
-    for(const kpi of kpiDefs){
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td style="font-weight:700;">${kpi.name}</td>`;
-
-      const vals = entries.map(e => e.metrics ? e.metrics[kpi.key] : NaN);
-      const finite = vals.filter(Number.isFinite);
-      const allEqual = finite.length > 0 && finite.every(v => Math.abs(v - finite[0]) < EPS);
-
-      let bestIdx = -1;
-      if(!allEqual && finite.length > 0){
-        let bestVal = kpi.higherIsBetter ? -Infinity : Infinity;
-        for(let i=0;i<vals.length;i++){
-          if(!Number.isFinite(vals[i])) continue;
-          if(kpi.higherIsBetter ? (vals[i]>bestVal+EPS) : (vals[i]<bestVal-EPS)){ bestVal=vals[i]; bestIdx=i; }
-        }
-      }
-
-      for(let i=0;i<entries.length;i++){
-        const td = document.createElement("td");
-        const mainText = kpi.fmt(vals[i]);
-
-        if(entries[i].stdMetrics){
-          const sigmaStr = fmtSigma(kpi, entries[i].stdMetrics[kpi.key]);
-          if(sigmaStr){
-            td.innerHTML = `${escapeHtml(mainText)} <span style="color:#9ca3af;font-size:10px;">±${sigmaStr}</span>`;
-          } else {
-            td.textContent = mainText;
-          }
-        } else {
-          td.textContent = mainText;
-        }
-
-        if(i===bestIdx && bestIdx>=0) td.className = "win";
-        tr.appendChild(td);
-      }
-      tbody.appendChild(tr);
-    }
-  }
   // ===============================
   
 // 6c) SCENARIO EDITING
@@ -1462,32 +1458,6 @@
     info.setContent(`<b>${escapeHtml(label)}</b><br/>name: ${escapeHtml(c.name||"")}<br/>lsoa: ${escapeHtml(c.lsoaCode||"")}<br/>score: ${(c.score??0).toFixed(3)}`);
     info.setPosition({lat:c.lat,lng:c.lng});info.open({map});
   }
-
-  // ===============================
-  
-// 10) COMPARISON TABLE HELPERS
-  // ===============================
-  function fmtPct(v){ return Number.isFinite(v)? (v*100).toFixed(1)+"%" : "–"; }
-  function fmtPP(v){ return Number.isFinite(v)? (v*100).toFixed(1)+" pp" : "–"; }
-  function fmtNum(v,d=1){ return Number.isFinite(v)? v.toFixed(d) : "–"; }
-  function fmtInt(v){ return Number.isFinite(v)? String(Math.round(v)) : "–"; }
-
-  // Given an array of {label, metrics}, render a comparison table body
-  // kpiDefs: [{name, key, fmt, higherIsBetter}]
-
-  const KPI_DEFS = [
-    { name:"Coverage",                key:"cov",       fmt:fmtPct, higherIsBetter:true },
-    { name:"Worst-served min improve", key:"wsMin",    fmt:fmtPP,  higherIsBetter:true },
-    { name:"Worst-served avg improve", key:"wsAvg",    fmt:fmtPP,  higherIsBetter:true },
-    { name:"Avg score",               key:"avgScore",  fmt:v=>fmtNum(v,3), higherIsBetter:true },
-    { name:"Avg dist to existing (m)", key:"dex",      fmt:fmtInt, higherIsBetter:true },
-    { name:"Redundancy (avg nearest m)", key:"red",    fmt:fmtInt, higherIsBetter:true },
-    { name:"Equity-weighted coverage", key:"eqCov",    fmt:fmtPct, higherIsBetter:true },
-    { name:"Equity disparity (Q5−Q1)", key:"eqDisp",   fmt:fmtPP,  higherIsBetter:false },
-    { name:"Demand-wtd avg access (m)", key:"dwAvgDist", fmt:fmtInt, higherIsBetter:false },
-    { name:"P90 access distance (m)",  key:"p90Access",  fmt:fmtInt, higherIsBetter:false },
-    { name:"Max access distance (m)",  key:"maxAccess",  fmt:fmtInt, higherIsBetter:false },
-  ];
 
   // ===============================
   
