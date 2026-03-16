@@ -151,6 +151,11 @@
         <div class="row" style="margin-top:6px">
           <button id="btnExportBest" class="btn secondary" style="font-size:11px" disabled>Export best (CSV)</button>
           <button id="btnExportBestGeo" class="btn secondary" style="font-size:11px" disabled>Export best (GeoJSON)</button>
+          <button id="btnExportCompare" class="btn secondary" style="font-size:11px" disabled>Export comparison (CSV)</button>
+        </div>
+        <div id="uncoveredSection" style="display:none;margin-top:6px">
+          <div style="font-weight:700;font-size:11px;color:#dc2626">Uncovered LSOAs (not reached by best plan):</div>
+          <div id="uncoveredList" style="font-size:10px;color:#6b7280;max-height:60px;overflow:auto"></div>
         </div>
       </div>
       <div id="shortlistSection" style="display:none">
@@ -274,7 +279,8 @@
   const DATA_URLS = {
     supply:     new URL("data/processed/supply_chargers_ocm_enriched.geojson", BASE).href,
     lsoa:       new URL("data/processed/demand_lsoa_cardiff_exact_pop_wgs84_enriched.geojson", BASE).href,
-    candidates: new URL("data/processed/candidates_osm_v2.geojson", BASE).href
+    candidates: new URL("data/processed/candidates_osm_v2.geojson", BASE).href,
+    demandPts:  new URL("data/processed/demand_points_cardiff_exact_pop_wgs84.geojson", BASE).href
   };
 
   const CARDIFF_BOUNDS = { north: 51.566, south: 51.410, east: -3.065, west: -3.333 };
@@ -363,6 +369,7 @@
   let lsoaIndex = [], lsoaByCodeMap = new Map();
   let supplyPts = [], candPts = [], candPtsOriginal = [];
   let demandPts = []; // LSOA centroids for coverage evaluation (separate from candidates)
+  let demandPtsGeoJSONData = null; // Loaded demand points file (pre-computed centroids)
 
   let activeTab = "main";
   let editMode = "navigate";
@@ -926,8 +933,9 @@
     document.getElementById("compareTime").textContent=elapsed+"s";
     planASol=entries[best.bestIdx].sol;setPlanLayer(planALayer,planASol,"Plan A: "+entries[best.bestIdx].label);
     if(entries.length>1){var si=best.bestIdx===0?1:0;planBSol=entries[si].sol;setPlanLayer(planBLayer,planBSol,"Plan B: "+entries[si].label);}
-    document.getElementById("btnExportBest").disabled=false;document.getElementById("btnExportBestGeo").disabled=false;
+    document.getElementById("btnExportBest").disabled=false;document.getElementById("btnExportBestGeo").disabled=false;document.getElementById("btnExportCompare").disabled=false;
     renderBestList(planASol,entries[best.bestIdx].label);
+    showUncoveredLSOAs(planASol);
     if(previousRunSnapshot)renderEditDeltas(entries[best.bestIdx].metrics);
     setStatus("Done ("+elapsed+"s). Best: "+entries[best.bestIdx].label+(best.isTie?" (tie)":"")+" ["+(best.modeLabel||"Neutral")+"]"+(previousRunSnapshot?" [Δ deltas shown vs previous run]":"")+".");
   }
@@ -1075,6 +1083,7 @@
     document.getElementById("btnSelectNone").addEventListener("click",function(){["ckLsoaRank","ckLsoaGreedy","ckGaScore","ckGaCovScore","ckGaLex","ckHybrid"].forEach(function(id){document.getElementById(id).checked=false;});});
     document.getElementById("btnExportBest").addEventListener("click",function(){if(planASol)exportCSV(planASol,"best_plan.csv");});
     document.getElementById("btnExportBestGeo").addEventListener("click",function(){if(planASol)exportGeoJSON(planASol,"best_plan.geojson");});
+    document.getElementById("btnExportCompare").addEventListener("click",function(){exportComparisonCSV();});
     document.getElementById("btnFindMinP").addEventListener("click",function(){setTimeout(findMinP,50);});
     document.getElementById("btnApplyFilter").addEventListener("click",function(){applySupplyFilter();});
     document.getElementById("btnExportGap").addEventListener("click",function(){exportGapCSV();});
@@ -1103,8 +1112,9 @@
 
     try{
       setStatus("Loading GeoJSON...");
-      var results=await Promise.all([loadGeoJSON(DATA_URLS.supply),loadGeoJSON(DATA_URLS.lsoa),loadGeoJSON(DATA_URLS.candidates)]);
-      var supply=results[0],lsoa=results[1],candidates=results[2];
+      var results=await Promise.all([loadGeoJSON(DATA_URLS.supply),loadGeoJSON(DATA_URLS.lsoa),loadGeoJSON(DATA_URLS.candidates),loadGeoJSON(DATA_URLS.demandPts).catch(function(){return null;})]);
+      var supply=results[0],lsoa=results[1],candidates=results[2],demandPtsGeoJSON=results[3];
+      demandPtsGeoJSONData=demandPtsGeoJSON; // save for buildDemandPts
       supplyLayer.addGeoJson(supply);lsoaLayer.addGeoJson(lsoa);
       lsoaIndex=(lsoa.features||[]).map(function(f){var props=f.properties||{};var code=getProp(props,FIELD.code,"LSOA");var pop=num(getProp(props,FIELD.pop,null),NaN);var demandRaw=Number.isFinite(pop)?pop:num(getProp(props,FIELD.demand,1),1);var medAge=num(getProp(props,FIELD.median_age,null),NaN);return{code:code,pop:pop,medianAge:medAge,demandRaw:demandRaw,equityRaw:computeEquityFromProps(props,medAge),penaltyRaw:computePenaltyFromProps(props),polygons:makePolygonsFromGeometry(f.geometry),feature:null,supplyRaw:0,gap01:0};});
       lsoaByCodeMap=new Map(lsoaIndex.map(function(r){return[r.code,r];}));
@@ -1326,20 +1336,23 @@
       (Number.isFinite(rented)?0.25*rented:0)+(Number.isFinite(nocar)?0.10*nocar:0));
   }
   function getWeights(){
-    let wd=num(document.getElementById("wDemand").value,0.65), wg=num(document.getElementById("wGap").value,0.35);
-    const sumB=wd+wg; if(sumB>0){wd/=sumB; wg/=sumB;}else{wd=0.65;wg=0.35;}
+    // Return raw slider values — normalisation happens in scoreCandidatesShared
+    let wd=num(document.getElementById("wDemand").value,0.65);
+    let wg=num(document.getElementById("wGap").value,0.35);
     return { wd, wg, wp:num(document.getElementById("wPenalty").value,0.25),
       wn:num(document.getElementById("wNear").value,0.20), wc:num(document.getElementById("wCluster").value,0.25) };
   }
   function updateWeightUI(){
     const w=getWeights();
-    document.getElementById("wDemandVal").textContent=w.wd.toFixed(2);
-    document.getElementById("wGapVal").textContent=w.wg.toFixed(2);
+    const wt=num(document.getElementById("wTraffic")?document.getElementById("wTraffic").value:0,0);
+    const sumBen=w.wd+w.wg+wt;
+    // Show normalised benefit weights (what's actually applied)
+    document.getElementById("wDemandVal").textContent=(sumBen>0?(w.wd/sumBen):0.5).toFixed(2);
+    document.getElementById("wGapVal").textContent=(sumBen>0?(w.wg/sumBen):0.35).toFixed(2);
     document.getElementById("wPenaltyVal").textContent=w.wp.toFixed(2);
     document.getElementById("wNearVal").textContent=w.wn.toFixed(2);
     document.getElementById("wClusterVal").textContent=w.wc.toFixed(2);
-    var wt=document.getElementById("wTraffic");
-    if(wt) document.getElementById("wTrafficVal").textContent=num(wt.value,0.15).toFixed(2);
+    if(document.getElementById("wTrafficVal")) document.getElementById("wTrafficVal").textContent=(sumBen>0?(wt/sumBen):0).toFixed(2);
   }
   function normalize01(arr){
     let mn=Infinity, mx=-Infinity;
@@ -1415,15 +1428,35 @@
   // Build demand evaluation points from LSOA polygon centroids
   function buildDemandPts(){
     demandPts=[];
+    // Try to use pre-computed population-weighted centroids from loaded file
+    var loadedPts=new Map(); // code -> {lat,lng}
+    if(demandPtsGeoJSONData && demandPtsGeoJSONData.features){
+      for(var fi=0;fi<demandPtsGeoJSONData.features.length;fi++){
+        var ft=demandPtsGeoJSONData.features[fi];
+        if(!ft.geometry||ft.geometry.type!=="Point") continue;
+        var co=ft.geometry.coordinates||[];
+        if(typeof co[0]!=="number"||typeof co[1]!=="number") continue;
+        if(looksLike27700(co[0],co[1])) continue;
+        var cd=getProp(ft.properties||{},FIELD.code,"");
+        if(cd) loadedPts.set(cd,{lat:co[1],lng:co[0]});
+      }
+    }
+    var usedLoaded=0;
     for(var i=0;i<lsoaIndex.length;i++){
       var rec=lsoaIndex[i];
-      if(!rec.polygons||!rec.polygons.length) continue;
-      // Compute centroid from first polygon
-      var poly=rec.polygons[0]; var path=poly.getPath();
-      if(!path||path.getLength()===0) continue;
-      var latS=0,lngS=0,n=path.getLength();
-      for(var k=0;k<n;k++){var p=path.getAt(k);latS+=p.lat();lngS+=p.lng();}
-      var cLat=latS/n,cLng=lngS/n;
+      var cLat,cLng;
+      // Prefer pre-computed centroid
+      if(loadedPts.has(rec.code)){
+        var lp=loadedPts.get(rec.code);
+        cLat=lp.lat; cLng=lp.lng; usedLoaded++;
+      } else if(rec.polygons&&rec.polygons.length){
+        // Fallback: vertex-mean centroid from polygon
+        var poly=rec.polygons[0]; var path=poly.getPath();
+        if(!path||path.getLength()===0) continue;
+        var latS=0,lngS=0,n=path.getLength();
+        for(var k=0;k<n;k++){var p=path.getAt(k);latS+=p.lat();lngS+=p.lng();}
+        cLat=latS/n; cLng=lngS/n;
+      } else { continue; }
       demandPts.push(attachRad({
         lat:cLat,lng:cLng,
         lsoaCode:rec.code,
@@ -1453,6 +1486,7 @@
       var rec2=lsoaByCodeMap.get(demandPts[m].lsoaCode);
       demandPts[m].equityGroup=rec2?rec2.equityGroup:3;
     }
+    if(usedLoaded>0) console.log("buildDemandPts: used "+usedLoaded+"/"+demandPts.length+" pre-computed centroids");
   }
 
   function sampleDemandForCoverage(){
@@ -1619,10 +1653,9 @@
       let bestSq=Infinity;for(const s of sel){const d=distSqFast(c,s);if(d<bestSq)bestSq=d;}
       if(Math.min(exSq,bestSq)<=thrSq) covered[g]+=w;
     }
-    // Group 5 = highest need = most deprived; Group 1 = lowest need = least deprived
-    // WIMD convention: Q5 = least deprived, Q1 = most deprived
-    // diff = least_deprived_cov - most_deprived_cov
-    // positive = inequitable (rich have better access), negative = pro-equity
+    // Internal: Group 5 = highest need (most deprived), Group 1 = lowest need (least deprived)
+    // diff = Group1_cov - Group5_cov
+    // positive = inequitable (least deprived have better access), negative = pro-equity
     const mostDeprived=total[5]>0?covered[5]/total[5]:NaN;
     const leastDeprived=total[1]>0?covered[1]/total[1]:NaN;
     return {q1:mostDeprived,q5:leastDeprived,diff:(Number.isFinite(mostDeprived)&&Number.isFinite(leastDeprived))?(leastDeprived-mostDeprived):NaN};
@@ -1711,7 +1744,7 @@
   
 // 6b) MULTI-RUN GA INFRASTRUCTURE
   // ===============================
-  function getGARuns(){ return Math.max(1, Math.min(20, Math.floor(num(document.getElementById("gaRuns").value, 5)))); }
+  // getGARuns() defined above in Feature 3 section
 
   // Run GA N times, return { allMetrics[], bestRun:{sol,metrics}, medianMetrics, stdMetrics }
   function runGAMultiple(P, seedSol, demandPoints, cache, mode, N){
@@ -2214,6 +2247,61 @@
       rows.push([r.code,Number.isFinite(r.pop)?r.pop:"",Number.isFinite(r.gap01)?r.gap01.toFixed(4):"",Number.isFinite(r.gap01)?(r.gap01*100).toFixed(1):"",r.supplyRaw||0,Math.round(r.supplyCapacity||0),typeof kwpc==="number"?kwpc.toFixed(4):kwpc,Number.isFinite(r.equityRaw)?r.equityRaw.toFixed(4):"",""]);
     }
     downloadText("cardiff_gap_analysis.csv",rows.map(function(r){return r.map(function(x){return '"'+x+'"';}).join(",");}).join("\n"));
+  }
+
+  // Export comparison table as CSV
+  function exportComparisonCSV(){
+    if(!Object.keys(compareResultsStore).length) return;
+    var keys=["lsoaRank","lsoaGreedy","gaScore","gaCovScore","gaLex","hybrid"];
+    var entries=[];
+    for(var i=0;i<keys.length;i++){if(compareResultsStore[keys[i]])entries.push(compareResultsStore[keys[i]]);}
+    if(!entries.length) return;
+    var rows=[["KPI"].concat(entries.map(function(e){return e.label;}))];
+    for(var k=0;k<KPI_DEFS.length;k++){
+      var kpi=KPI_DEFS[k];
+      var row=[kpi.name];
+      for(var j=0;j<entries.length;j++){
+        var m=entries[j].metrics;
+        var v=m?m[kpi.key]:NaN;
+        row.push(Number.isFinite(v)?v:"");
+      }
+      rows.push(row);
+    }
+    downloadText("comparison_results.csv",rows.map(function(r){return r.map(function(x){return '"'+x+'"';}).join(",");}).join("\n"));
+  }
+
+  // Show which LSOAs are not covered by the best plan
+  function showUncoveredLSOAs(sol){
+    if(!sol||!sol.length||!demandPts.length){
+      document.getElementById("uncoveredSection").style.display="none";return;
+    }
+    var thrSq=Math.pow(getCoverageThresholdDistM(),2);
+    var uncovered=[];
+    for(var i=0;i<demandPts.length;i++){
+      var dp=demandPts[i];
+      var exSq=Number.isFinite(dp.distToExistingSq)?dp.distToExistingSq:Infinity;
+      var bestSq=exSq;
+      for(var j=0;j<sol.length;j++){var dSq=distSqFast(dp,sol[j]);if(dSq<bestSq)bestSq=dSq;}
+      if(bestSq>thrSq){
+        var rec=lsoaByCodeMap.get(dp.lsoaCode);
+        uncovered.push({code:dp.lsoaCode,pop:rec?rec.pop:0,gap:rec?rec.gap01:0,dist:Math.sqrt(bestSq)});
+      }
+    }
+    var el=document.getElementById("uncoveredSection");
+    var list=document.getElementById("uncoveredList");
+    if(uncovered.length===0){
+      el.style.display="block";
+      list.innerHTML="<span style='color:#059669;font-weight:700'>All 236 LSOAs covered! ✓</span>";
+    }else{
+      uncovered.sort(function(a,b){return b.pop-a.pop;});
+      el.style.display="block";
+      var html=uncovered.length+" LSOAs uncovered: ";
+      html+=uncovered.slice(0,10).map(function(u){
+        return "<b>"+escapeHtml(u.code)+"</b> (pop "+Math.round(u.pop)+", "+Math.round(u.dist)+"m away)";
+      }).join(", ");
+      if(uncovered.length>10) html+=" ... and "+(uncovered.length-10)+" more";
+      list.innerHTML=html;
+    }
   }
 
   // P-sensitivity sweep: run greedy for P=5,10,...,50 and show coverage curve
