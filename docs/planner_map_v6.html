@@ -375,6 +375,9 @@
   let baselineMetrics = null;
   let previousRunSnapshot = null; // {key -> metrics} from last compare run, for delta display
   let worstCache = { set: new Set(), codes: [], currentAgg: new Map(), pct: 20 };
+  let gaWorker = null;
+  let gaReqSeq = 1;
+  const gaPending = new Map();
 
   // ===============================
   // 1b) KPI INFRASTRUCTURE (must precede features)
@@ -846,7 +849,7 @@
     return{P:P,year:year,target:target,supplyTotal:supplyTotal,gap:gap,demandPoints:demandPoints,ws:ws};
   }
 
-  function runSelectedComparison(){
+  async function runSelectedComparison(){
     var ctx=commonPrecompute();if(!ctx)return;
     var t0=performance.now();
 
@@ -882,9 +885,9 @@
     try{
       if(checked.lsoaRank){var sol=runBaselineLSOA(ctx.P,"rank");compareResultsStore.lsoaRank={sol:sol,metrics:computeFullMetrics(sol,ctx.demandPoints,ctx.ws),label:"LSOA Rank"};}
       if(checked.lsoaGreedy){var sol2=runBaselineLSOA(ctx.P,"greedy");compareResultsStore.lsoaGreedy={sol:sol2,metrics:computeFullMetrics(sol2,ctx.demandPoints,ctx.ws),label:"LSOA Greedy"};}
-      if(checked.gaScore){var res=runGAMultiple(ctx.P,null,ctx.demandPoints,ctx.ws,"score",Neff);compareResultsStore.gaScore={sol:res.bestRun.sol,metrics:res.medianMetrics,stdMetrics:res.stdMetrics,label:"GA Score",N:res.N};}
-      if(checked.gaCovScore){var res2=runGAMultiple(ctx.P,null,ctx.demandPoints,ctx.ws,"covScore",Neff);compareResultsStore.gaCovScore={sol:res2.bestRun.sol,metrics:res2.medianMetrics,stdMetrics:res2.stdMetrics,label:"GA Cov\u2192Score",N:res2.N};}
-      if(checked.gaLex){var res3=runGAMultiple(ctx.P,null,ctx.demandPoints,ctx.ws,"lex",Neff);compareResultsStore.gaLex={sol:res3.bestRun.sol,metrics:res3.medianMetrics,stdMetrics:res3.stdMetrics,label:"GA Lex",N:res3.N};}
+      if(checked.gaScore){var res=await runGAMultipleAsync(ctx.P,null,ctx.demandPoints,ctx.ws,"score",Neff);compareResultsStore.gaScore={sol:res.bestRun.sol,metrics:res.medianMetrics,stdMetrics:res.stdMetrics,label:"GA Score",N:res.N};}
+      if(checked.gaCovScore){var res2=await runGAMultipleAsync(ctx.P,null,ctx.demandPoints,ctx.ws,"covScore",Neff);compareResultsStore.gaCovScore={sol:res2.bestRun.sol,metrics:res2.medianMetrics,stdMetrics:res2.stdMetrics,label:"GA Cov\u2192Score",N:res2.N};}
+      if(checked.gaLex){var res3=await runGAMultipleAsync(ctx.P,null,ctx.demandPoints,ctx.ws,"lex",Neff);compareResultsStore.gaLex={sol:res3.bestRun.sol,metrics:res3.medianMetrics,stdMetrics:res3.stdMetrics,label:"GA Lex",N:res3.N};}
       if(checked.hybrid){
         var seedSol=null;
         if(compareResultsStore.lsoaGreedy)seedSol=compareResultsStore.lsoaGreedy.sol;
@@ -896,7 +899,7 @@
         if(compareResultsStore.gaCovScore)gaE.push({key:"covScore",m:compareResultsStore.gaCovScore.metrics});
         if(compareResultsStore.gaLex)gaE.push({key:"lex",m:compareResultsStore.gaLex.metrics});
         if(gaE.length>0){var ee=gaE.map(function(e){return{label:e.key,metrics:e.m};});var bi=selectBestByDecisionMode(ee);bestGAMode=gaE[bi.bestIdx].key;}
-        var res4=runGAMultiple(ctx.P,seedSol,ctx.demandPoints,ctx.ws,bestGAMode,Neff);
+        var res4=await runGAMultipleAsync(ctx.P,seedSol,ctx.demandPoints,ctx.ws,bestGAMode,Neff);
         compareResultsStore.hybrid={sol:res4.bestRun.sol,metrics:res4.medianMetrics,stdMetrics:res4.stdMetrics,label:"Hybrid",N:res4.N};
       }
     }finally{candPts=saved;}
@@ -1067,7 +1070,7 @@
     document.getElementById("tabMain").addEventListener("click",function(){setTab("main");});
     document.getElementById("tabGap").addEventListener("click",function(){setTab("gap");});
     document.getElementById("tabEdit").addEventListener("click",function(){setTab("edit");});
-    document.getElementById("btnCompare").addEventListener("click",function(){setTimeout(runSelectedComparison,50);});
+    document.getElementById("btnCompare").addEventListener("click",function(){setTimeout(function(){runSelectedComparison().catch(function(err){setStatus("Comparison failed: "+(err&&err.message?err.message:String(err)));});},50);});
     document.getElementById("btnSelectAll").addEventListener("click",function(){["ckLsoaRank","ckLsoaGreedy","ckGaScore","ckGaCovScore","ckGaLex","ckHybrid"].forEach(function(id){document.getElementById(id).checked=true;});});
     document.getElementById("btnSelectNone").addEventListener("click",function(){["ckLsoaRank","ckLsoaGreedy","ckGaScore","ckGaCovScore","ckGaLex","ckHybrid"].forEach(function(id){document.getElementById(id).checked=false;});});
     document.getElementById("btnExportBest").addEventListener("click",function(){if(planASol)exportCSV(planASol,"best_plan.csv");});
@@ -1193,6 +1196,40 @@
     const res = await fetch(url,{cache:"no-store"});
     if(!res.ok) throw new Error("Fetch failed: " + res.status + " " + url);
     return await res.json();
+  }
+  function ensureGAWorker(){
+    if(typeof Worker === "undefined") return null;
+    if(gaWorker) return gaWorker;
+    try{
+      gaWorker = new Worker(new URL("ga_worker.js", BASE).href);
+      gaWorker.onmessage = function(ev){
+        const d = ev && ev.data ? ev.data : {};
+        const pending = gaPending.get(d.id);
+        if(!pending) return;
+        gaPending.delete(d.id);
+        if(d.ok) pending.resolve(d.result);
+        else pending.reject(new Error(d.error || "GA worker error"));
+      };
+      gaWorker.onerror = function(err){
+        for(const [, pending] of gaPending.entries()) pending.reject(err || new Error("GA worker crashed"));
+        gaPending.clear();
+        try{ gaWorker.terminate(); }catch(_e){}
+        gaWorker = null;
+      };
+      return gaWorker;
+    }catch(_e){
+      gaWorker = null;
+      return null;
+    }
+  }
+  function runGAInWorker(payload){
+    const w = ensureGAWorker();
+    if(!w) return Promise.reject(new Error("Worker unavailable"));
+    return new Promise(function(resolve, reject){
+      const id = gaReqSeq++;
+      gaPending.set(id, {resolve, reject});
+      w.postMessage({id, type:"runGAMultiple", payload});
+    });
   }
   function looksLike27700(lng, lat){ return Math.abs(lng) > 1000 || Math.abs(lat) > 1000; }
 
@@ -1708,6 +1745,75 @@
       stdMetrics,
       N
     };
+  }
+
+  function buildGAWorkerPayload(P, seedSol, demandPoints, cache, mode, N){
+    const idxByCand = new Map();
+    for(let i=0;i<candPts.length;i++) idxByCand.set(candPts[i], i);
+    const lockedIdx = [...lockedSet].map(c => idxByCand.get(c)).filter(Number.isInteger);
+    const seedIdx = (seedSol||[]).map(c => idxByCand.get(c)).filter(Number.isInteger);
+    const candidates = candPts.map((c, i) => ({
+      i,
+      latRad:num(c.latRad,0),
+      lngRad:num(c.lngRad,0),
+      cosLat:num(c.cosLat,1),
+      benefit:num(c.benefit,0),
+      costBase:num(c.costBase,0),
+      scoreBase:num(c.scoreBase,0),
+      distToExistingSq:Number.isFinite(c.distToExistingSq)?c.distToExistingSq:Infinity
+    }));
+    const demand = demandPoints.map(d => ({
+      latRad:num(d.latRad,0),
+      lngRad:num(d.lngRad,0),
+      cosLat:num(d.cosLat,1),
+      demandRaw:Math.max(0,num(d.demandRaw,1)),
+      e01:num(d.e01,0.5),
+      equityGroup:Math.max(1,Math.min(5,Math.floor(num(d.equityGroup,3)))),
+      lsoaCode:String(d.lsoaCode||""),
+      distToExistingSq:Number.isFinite(d.distToExistingSq)?d.distToExistingSq:Infinity
+    }));
+    const agg = {};
+    for(const code of cache.codes||[]){
+      const rec = cache.currentAgg && cache.currentAgg.get ? cache.currentAgg.get(code) : null;
+      if(rec) agg[code] = {totW:num(rec.totW,0), covCur01:num(rec.covCur01,0)};
+    }
+    return {
+      P, mode, N,
+      candidates, demand,
+      lockedIdx, seedIdx,
+      cache: { codes:(cache.codes||[]).slice(), currentAgg:agg },
+      cfg: {
+        spreadEnabled: !!document.getElementById("ckSpread").checked,
+        minSpacingM: Math.max(0, num(document.getElementById("minSpacing").value,700)),
+        coverageThresholdDistM: getCoverageThresholdDistM(),
+        wc: num(getWeights().wc, 0.25),
+        gaPop: Math.max(10,Math.floor(num(document.getElementById("gaPop").value,120))),
+        gaGen: Math.max(10,Math.floor(num(document.getElementById("gaGen").value,240))),
+        gaMut: clamp01(num(document.getElementById("gaMut").value,0.45)),
+        gaElite: Math.max(0,Math.min(0.5,num(document.getElementById("gaElite").value,0.08))),
+        gaEvalSample: Math.max(10,Math.floor(num(document.getElementById("gaEvalSample").value,80))),
+        gaSeedPct: Math.max(0,Math.min(0.8,num(document.getElementById("gaSeedPct").value,0.15))),
+        eqDir: getEquityDir()
+      }
+    };
+  }
+
+  async function runGAMultipleAsync(P, seedSol, demandPoints, cache, mode, N){
+    try{
+      const payload = buildGAWorkerPayload(P, seedSol, demandPoints, cache, mode, N);
+      const r = await runGAInWorker(payload);
+      const bestSol = (r.bestSolIdx||[]).map(i=>candPts[i]).filter(Boolean);
+      return {
+        allMetrics: r.allMetrics || [],
+        bestRun: { sol: bestSol, metrics: r.bestMetrics || null },
+        medianMetrics: r.medianMetrics || {},
+        stdMetrics: r.stdMetrics || {},
+        N: r.N || N,
+        fromWorker: true
+      };
+    }catch(_e){
+      return runGAMultiple(P, seedSol, demandPoints, cache, mode, N);
+    }
   }
 
   function computeMedian(arr){
