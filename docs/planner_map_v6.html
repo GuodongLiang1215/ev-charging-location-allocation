@@ -231,6 +231,12 @@
       <div class="row"><label class="small" style="min-width:130px">NearExisting wN</label><input id="wNear" type="range" min="0" max="1" step="0.01" value="0.20" style="flex:1"><span class="badge" id="wNearVal">0.20</span></div>
       <div class="row"><label class="small" style="min-width:130px">Cluster wC</label><input id="wCluster" type="range" min="0" max="1" step="0.01" value="0.25" style="flex:1"><span class="badge" id="wClusterVal">0.25</span></div>
       <div class="row"><label class="small" style="min-width:130px">Traffic wT</label><input id="wTraffic" type="range" min="0" max="1" step="0.01" value="0.15" style="flex:1"><span class="badge" id="wTrafficVal">0.15</span></div>
+      <div class="row"><div class="badge" style="font-weight:800">Decision mode</div></div>
+      <div class="row"><label class="small" style="min-width:130px">Mode</label><select id="decisionMode" style="width:220px"><option value="neutral" selected>Neutral (majority vote)</option><option value="policy">Policy preset (weighted)</option><option value="custom">Custom weighted</option><option value="thresholdWeighted">Threshold + weighted</option></select></div>
+      <div class="row" id="rowPolicyPreset"><label class="small" style="min-width:130px">Policy preset</label><select id="policyPreset" style="width:220px"><option value="balanced" selected>Balanced</option><option value="equityFirst">Equity first</option><option value="accessFirst">Access first</option></select></div>
+      <div class="row" id="rowCustomWeights" style="display:none"><label class="small" style="min-width:130px">Custom KPI weights</label><input id="customWeightSpec" class="input" style="width:100%" value="cov=1,eqCov=1.2,eqDisp=1.2,dwAvgDist=1,p90Access=1,maxAccess=1,wsMin=0.8,wsAvg=0.8,avgScore=0.4,dex=0.4,red=0.4"/></div>
+      <div class="row" id="rowDecisionThresholds" style="display:none"><label class="small" style="min-width:130px">Min cov %</label><input id="thCov" class="input" style="width:60px" type="number" min="0" max="100" step="1" value="85"/><label class="small">Min eqCov %</label><input id="thEqCov" class="input" style="width:60px" type="number" min="0" max="100" step="1" value="80"/><label class="small">Max P90 (m)</label><input id="thP90" class="input" style="width:70px" type="number" min="0" step="50" value="2500"/></div>
+      <div class="muted" id="decisionInfo">Decision: Neutral (majority vote).</div>
       <div class="row"><div class="badge" style="font-weight:800">Worst-served &amp; equity</div></div>
       <div class="row"><label class="small" style="min-width:130px">Worst % group</label><input id="worstPct" class="input" style="width:60px" type="number" min="1" max="50" step="1" value="20"/><label class="small" style="min-width:80px">Eq. direction</label><select id="equityDir" style="width:130px"><option value="highNeedHigh" selected>Higher=higher need</option><option value="highNeedLow">Lower=higher need</option></select></div>
       <div class="row"><div class="badge" style="font-weight:800">GA tuning</div></div>
@@ -399,6 +405,21 @@
     { name:"Max access distance (m)",  key:"maxAccess",  fmt:fmtInt, higherIsBetter:false },
   ];
 
+  const KPI_WEIGHT_PRESETS = {
+    balanced: {
+      cov:1.2, wsMin:1.0, wsAvg:1.0, avgScore:0.5, dex:0.4, red:0.4,
+      eqCov:1.2, eqDisp:1.2, dwAvgDist:1.0, p90Access:1.0, maxAccess:1.0
+    },
+    equityFirst: {
+      cov:1.0, wsMin:1.0, wsAvg:1.0, avgScore:0.3, dex:0.2, red:0.2,
+      eqCov:1.8, eqDisp:2.0, dwAvgDist:0.8, p90Access:0.8, maxAccess:0.8
+    },
+    accessFirst: {
+      cov:1.5, wsMin:0.8, wsAvg:0.8, avgScore:0.3, dex:0.3, red:0.3,
+      eqCov:0.9, eqDisp:0.7, dwAvgDist:1.6, p90Access:1.8, maxAccess:1.8
+    }
+  };
+
   function pickBestFromMetrics(entriesArr){
     const scores = entriesArr.map(()=>0);
     const EPS = 1e-6;
@@ -420,6 +441,146 @@
     const isTie = (maxScore === 0) || (winners.length > 1);
     const bestIdx = isTie ? (entriesArr.length - 1) : winners[0];
     return { bestIdx, isTie, scores };
+  }
+
+  function getDecisionMode(){ return String(document.getElementById("decisionMode").value || "neutral"); }
+  function getPolicyPreset(){ return String(document.getElementById("policyPreset").value || "balanced"); }
+
+  function parseCustomWeightSpec(spec){
+    const out = {};
+    if(!spec || !String(spec).trim()) return out;
+    const parts = String(spec).split(",");
+    for(const raw of parts){
+      const t = raw.trim();
+      if(!t) continue;
+      const kv = t.split("=");
+      if(kv.length !== 2) continue;
+      const k = kv[0].trim();
+      const v = Number(kv[1].trim());
+      if(!k || !Number.isFinite(v) || v < 0) continue;
+      out[k] = v;
+    }
+    return out;
+  }
+
+  function getDecisionWeights(mode){
+    if(mode === "policy"){
+      const preset = getPolicyPreset();
+      return Object.assign({}, KPI_WEIGHT_PRESETS[preset] || KPI_WEIGHT_PRESETS.balanced);
+    }
+    if(mode === "custom" || mode === "thresholdWeighted"){
+      const parsed = parseCustomWeightSpec(document.getElementById("customWeightSpec").value);
+      if(Object.keys(parsed).length > 0) return parsed;
+      return Object.assign({}, KPI_WEIGHT_PRESETS.balanced);
+    }
+    const w = {};
+    for(const kpi of KPI_DEFS) w[kpi.key] = 1;
+    return w;
+  }
+
+  function getDecisionThresholds(){
+    return {
+      cov: clamp01(num(document.getElementById("thCov").value, 85) / 100),
+      eqCov: clamp01(num(document.getElementById("thEqCov").value, 80) / 100),
+      p90Access: Math.max(0, num(document.getElementById("thP90").value, 2500))
+    };
+  }
+
+  function updateDecisionUI(){
+    const mode = getDecisionMode();
+    const rowPolicy = document.getElementById("rowPolicyPreset");
+    const rowCustom = document.getElementById("rowCustomWeights");
+    const rowTh = document.getElementById("rowDecisionThresholds");
+    if(rowPolicy) rowPolicy.style.display = (mode === "policy") ? "flex" : "none";
+    if(rowCustom) rowCustom.style.display = (mode === "custom" || mode === "thresholdWeighted") ? "flex" : "none";
+    if(rowTh) rowTh.style.display = (mode === "thresholdWeighted") ? "flex" : "none";
+
+    let msg = "Decision: Neutral (majority vote).";
+    if(mode === "policy") msg = "Decision: Policy preset weighted score.";
+    else if(mode === "custom") msg = "Decision: Custom weighted score.";
+    else if(mode === "thresholdWeighted") msg = "Decision: Threshold filter + weighted score.";
+    const el = document.getElementById("decisionInfo");
+    if(el) el.textContent = msg;
+  }
+
+  function selectBestByDecisionMode(entriesArr){
+    const mode = getDecisionMode();
+    if(mode === "neutral"){
+      const r = pickBestFromMetrics(entriesArr);
+      return Object.assign({mode:"neutral",modeLabel:"Neutral"}, r);
+    }
+
+    const EPS = 1e-9;
+    const weights = getDecisionWeights(mode);
+    const usableKpis = KPI_DEFS.filter(k => (weights[k.key] || 0) > 0);
+    if(!usableKpis.length){
+      const r = pickBestFromMetrics(entriesArr);
+      return Object.assign({mode:"neutral",modeLabel:"Neutral"}, r);
+    }
+
+    const thresholds = getDecisionThresholds();
+    let eligibleIdx = entriesArr.map((_, i) => i);
+    let thresholdFallback = false;
+
+    if(mode === "thresholdWeighted"){
+      const pass = [];
+      for(let i = 0; i < entriesArr.length; i++){
+        const m = entriesArr[i].metrics || {};
+        const ok = Number.isFinite(m.cov) && Number.isFinite(m.eqCov) && Number.isFinite(m.p90Access)
+          && m.cov >= thresholds.cov
+          && m.eqCov >= thresholds.eqCov
+          && m.p90Access <= thresholds.p90Access;
+        if(ok) pass.push(i);
+      }
+      if(pass.length > 0) eligibleIdx = pass;
+      else thresholdFallback = true;
+    }
+
+    const scores = entriesArr.map(_ => NaN);
+    for(const i of eligibleIdx){
+      let numer = 0, denom = 0;
+      for(const kpi of usableKpis){
+        const vals = eligibleIdx
+          .map(ii => entriesArr[ii].metrics ? entriesArr[ii].metrics[kpi.key] : NaN)
+          .filter(Number.isFinite);
+        if(!vals.length) continue;
+        const mn = Math.min(...vals), mx = Math.max(...vals);
+        const raw = entriesArr[i].metrics ? entriesArr[i].metrics[kpi.key] : NaN;
+        if(!Number.isFinite(raw)) continue;
+        let norm = 0.5;
+        if(mx > mn + EPS){
+          norm = kpi.higherIsBetter ? ((raw - mn) / (mx - mn)) : ((mx - raw) / (mx - mn));
+          norm = clamp01(norm);
+        }
+        const wk = weights[kpi.key] || 0;
+        numer += wk * norm;
+        denom += wk;
+      }
+      scores[i] = denom > 0 ? numer / denom : NaN;
+    }
+
+    let bestIdx = -1, bestVal = -Infinity;
+    for(const i of eligibleIdx){
+      const v = scores[i];
+      if(!Number.isFinite(v)) continue;
+      if(v > bestVal + EPS){ bestVal = v; bestIdx = i; }
+      else if(Math.abs(v - bestVal) <= EPS){ bestIdx = i; } // keep last-on-tie behavior
+    }
+    if(bestIdx < 0){
+      const r = pickBestFromMetrics(entriesArr);
+      return Object.assign({mode:"neutral",modeLabel:"Neutral"}, r);
+    }
+
+    const ties = eligibleIdx.filter(i => Number.isFinite(scores[i]) && Math.abs(scores[i] - bestVal) <= EPS);
+    return {
+      bestIdx,
+      isTie: ties.length > 1,
+      scores,
+      mode,
+      modeLabel: mode === "policy" ? "Policy preset" : (mode === "custom" ? "Custom weighted" : "Threshold+weighted"),
+      thresholdFallback,
+      feasibleCount: mode === "thresholdWeighted" ? eligibleIdx.length : entriesArr.length
+    };
   }
 
   // ===============================
@@ -679,7 +840,7 @@
     document.getElementById("k_gap").textContent=String(Math.round(gap));
     document.getElementById("k_candidates").textContent=String(candPts.filter(function(c){return !excludedSet.has(c);}).length);
     if(!candPts.length){setStatus("No candidates.");return null;}
-    updateCoverageUI();computeLSOAGapScores();computeDistancesToExisting();scoreCandidatesShared();computeEquityGroupsFromLSOA();updateWeightUI();
+    updateCoverageUI();computeLSOAGapScores();computeDistancesToExisting();scoreCandidatesShared();computeEquityGroupsFromLSOA();updateWeightUI();updateDecisionUI();
     buildDemandPts();
     var demandPoints=sampleDemandForCoverage();var ws=buildWorstServedCache(demandPoints);
     return{P:P,year:year,target:target,supplyTotal:supplyTotal,gap:gap,demandPoints:demandPoints,ws:ws};
@@ -730,7 +891,7 @@
         if(compareResultsStore.gaScore)gaE.push({key:"score",m:compareResultsStore.gaScore.metrics});
         if(compareResultsStore.gaCovScore)gaE.push({key:"covScore",m:compareResultsStore.gaCovScore.metrics});
         if(compareResultsStore.gaLex)gaE.push({key:"lex",m:compareResultsStore.gaLex.metrics});
-        if(gaE.length>0){var ee=gaE.map(function(e){return{label:e.key,metrics:e.m};});var bi=pickBestFromMetrics(ee);bestGAMode=gaE[bi.bestIdx].key;}
+        if(gaE.length>0){var ee=gaE.map(function(e){return{label:e.key,metrics:e.m};});var bi=selectBestByDecisionMode(ee);bestGAMode=gaE[bi.bestIdx].key;}
         var res4=runGAMultiple(ctx.P,seedSol,ctx.demandPoints,ctx.ws,bestGAMode,N);
         compareResultsStore.hybrid={sol:res4.bestRun.sol,metrics:res4.medianMetrics,stdMetrics:res4.stdMetrics,label:"Hybrid",N:res4.N};
       }
@@ -738,7 +899,7 @@
     var entries=[];var keys=["lsoaRank","lsoaGreedy","gaScore","gaCovScore","gaLex","hybrid"];
     for(var i=0;i<keys.length;i++){if(compareResultsStore[keys[i]])entries.push(Object.assign({},compareResultsStore[keys[i]],{_key:keys[i]}));}
     if(!entries.length){setStatus("No results.");return;}
-    var best=pickBestFromMetrics(entries);
+    var best=selectBestByDecisionMode(entries);
     bestMethodKey=entries[best.bestIdx]._key;
 
     // Save snapshot for next comparison
@@ -749,14 +910,19 @@
     var elapsed=((performance.now()-t0)/1000).toFixed(1);
     var gaInfo=entries.some(function(e){return e.N;})?" (GA: "+N+" runs each)":"";
     var deltaNote=previousRunSnapshot?" | Δ = change from previous run":"";
-    document.getElementById("compareRunInfo").textContent="P="+ctx.P+", "+entries.length+" methods"+gaInfo+deltaNote;
+    var modeInfo = best && best.modeLabel ? (" | Decision: "+best.modeLabel) : "";
+    if(best && best.mode==="thresholdWeighted"){
+      modeInfo += " (feasible "+(best.feasibleCount||0)+"/"+entries.length+")";
+      if(best.thresholdFallback) modeInfo += " [fallback: no method met all thresholds]";
+    }
+    document.getElementById("compareRunInfo").textContent="P="+ctx.P+", "+entries.length+" methods"+gaInfo+deltaNote+modeInfo;
     document.getElementById("compareTime").textContent=elapsed+"s";
     planASol=entries[best.bestIdx].sol;setPlanLayer(planALayer,planASol,"Plan A: "+entries[best.bestIdx].label);
     if(entries.length>1){var si=best.bestIdx===0?1:0;planBSol=entries[si].sol;setPlanLayer(planBLayer,planBSol,"Plan B: "+entries[si].label);}
     document.getElementById("btnExportBest").disabled=false;document.getElementById("btnExportBestGeo").disabled=false;
     renderBestList(planASol,entries[best.bestIdx].label);
     if(previousRunSnapshot)renderEditDeltas(entries[best.bestIdx].metrics);
-    setStatus("Done ("+elapsed+"s). Best: "+entries[best.bestIdx].label+(best.isTie?" (tie)":"")+(previousRunSnapshot?" [Δ deltas shown vs previous run]":"")+".");
+    setStatus("Done ("+elapsed+"s). Best: "+entries[best.bestIdx].label+(best.isTie?" (tie)":"")+" ["+(best.modeLabel||"Neutral")+"]"+(previousRunSnapshot?" [Δ deltas shown vs previous run]":"")+".");
   }
 
   function renderComparisonTable(entries, prevSnapshot){
@@ -912,6 +1078,12 @@
     document.getElementById("modeLock").addEventListener("click",function(){setEditMode("lock");});
     document.getElementById("btnResetEdits").addEventListener("click",function(){resetEdits();previousRunSnapshot=null;document.getElementById("editDeltaSection").style.display="none";});
     document.getElementById("covMode").addEventListener("change",updateCoverageUI);
+    document.getElementById("decisionMode").addEventListener("change",updateDecisionUI);
+    document.getElementById("policyPreset").addEventListener("change",updateDecisionUI);
+    document.getElementById("customWeightSpec").addEventListener("input",updateDecisionUI);
+    document.getElementById("thCov").addEventListener("input",updateDecisionUI);
+    document.getElementById("thEqCov").addEventListener("input",updateDecisionUI);
+    document.getElementById("thP90").addEventListener("input",updateDecisionUI);
 
     // Gap map controls
     document.getElementById("gapThreshold").addEventListener("input",function(){
@@ -986,7 +1158,7 @@
       baselineMetrics=computeBaselineMetrics(demandPoints);
       displayBaseline(baselineMetrics);
       var totalCap=computeTotalCapacityKw();
-      map.fitBounds(CARDIFF_BOUNDS);updateCoverageUI();
+      map.fitBounds(CARDIFF_BOUNDS);updateCoverageUI();updateDecisionUI();
       setStatus("Loaded. Supply: "+supplyPts.length+" locations, "+computeSupplyTotal()+" sockets, "+Math.round(totalCap)+" kW\nLSOAs: "+(lsoa.features||[]).length+", Candidates: "+candPts.length+(autoFilled>0?" ("+autoFilled+" auto-filled for empty LSOAs)":"")+"\nBaseline: "+(baselineMetrics.cov*100).toFixed(1)+"% coverage, avg access "+Math.round(baselineMetrics.avgDist)+"m\n\nSelect methods and click \"\u25b6 Compare Selected\".");
     }catch(err){console.error(err);setStatus("FAILED.\n"+String(err));alert(String(err));}
   }
