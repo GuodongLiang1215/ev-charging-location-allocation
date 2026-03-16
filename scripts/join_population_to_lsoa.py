@@ -208,7 +208,7 @@ def main():
     pts2.to_file(OUT_PTS, driver="GeoJSON")
     print("[SAVED]", OUT_PTS)
 
-    print("\nDONE ✅")
+    print("\nDONE")
     print("Next step: update planner_map.html to use:")
     print("  LSOA: demand_lsoa_cardiff_exact_pop.geojson")
     print("  Points: demand_points_cardiff_exact_pop.geojson")
