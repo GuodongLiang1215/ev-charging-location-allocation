@@ -7,8 +7,10 @@ from pathlib import Path
 # -----------------------
 POP_XLSX = "data/raw/demand/ons_lsoa_population_mid2024.xlsx"
 
-LSOA_GEOJSON = "data/processed/demand_lsoa_cardiff_exact.geojson"
-PTS_GEOJSON  = "data/processed/demand_points_cardiff_exact.geojson"
+LSOA_GEOJSON = "data/processed/demand_lsoa_cardiff_exact_v2.geojson"
+PTS_GEOJSON  = "data/processed/demand_points_cardiff_exact_v2.geojson"
+LSOA_GEOJSON_FALLBACK = "data/processed/demand_lsoa_cardiff_exact.geojson"
+PTS_GEOJSON_FALLBACK  = "data/processed/demand_points_cardiff_exact.geojson"
 
 OUT_LSOA = "data/processed/demand_lsoa_cardiff_exact_pop.geojson"
 OUT_PTS  = "data/processed/demand_points_cardiff_exact_pop.geojson"
@@ -37,6 +39,14 @@ INCLUDE_MEDIAN_AGE = True
 
 def _norm(x) -> str:
     return str(x).strip().lower()
+
+
+def _resolve_existing(primary: str, fallback=None) -> str:
+    if Path(primary).exists():
+        return primary
+    if fallback and Path(fallback).exists():
+        return fallback
+    raise FileNotFoundError(f"Missing input file: {primary}" + (f" (fallback also missing: {fallback})" if fallback else ""))
 
 
 def find_header_row(xlsx_path: str, sheet_name: str, must_have: list[str], scan_rows: int = 80) -> int:
@@ -169,8 +179,13 @@ def attach_to_points(points_gdf: gpd.GeoDataFrame, lsoa_gdf: gpd.GeoDataFrame) -
 
 
 def main():
+    lsoa_in = _resolve_existing(LSOA_GEOJSON, LSOA_GEOJSON_FALLBACK)
+    pts_in = _resolve_existing(PTS_GEOJSON, PTS_GEOJSON_FALLBACK)
+    print(f"[INPUT] LSOA: {lsoa_in}")
+    print(f"[INPUT] Points: {pts_in}")
+
     # 1) load LSOA geojson
-    lsoa = gpd.read_file(LSOA_GEOJSON)
+    lsoa = gpd.read_file(lsoa_in)
     if "LSOA21CD" not in lsoa.columns:
         raise ValueError("Your LSOA GeoJSON must contain 'LSOA21CD' (your file does).")
 
@@ -198,7 +213,7 @@ def main():
     print("[SAVED]", OUT_LSOA)
 
     # 5) attach to demand points
-    pts = gpd.read_file(PTS_GEOJSON)
+    pts = gpd.read_file(pts_in)
     pts2 = attach_to_points(pts, lsoa2)
 
     if "population" in pts2.columns:
