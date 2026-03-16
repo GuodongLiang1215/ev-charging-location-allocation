@@ -872,15 +872,19 @@
     var anyChecked=false;for(var k in checked)if(checked[k])anyChecked=true;
     if(!anyChecked){setStatus("Select at least one method.");return;}
     var N=getGARuns();
+    var Neff=N;
+    if(ctx.P>30) Neff=Math.min(Neff,3);
+    if(ctx.P>45) Neff=Math.min(Neff,2);
+    if(ctx.P>60) Neff=1;
     setStatus("Running comparison...");
     compareResultsStore={};
     var saved=candPts;candPts=saved.filter(function(c){return !excludedSet.has(c);});
     try{
       if(checked.lsoaRank){var sol=runBaselineLSOA(ctx.P,"rank");compareResultsStore.lsoaRank={sol:sol,metrics:computeFullMetrics(sol,ctx.demandPoints,ctx.ws),label:"LSOA Rank"};}
       if(checked.lsoaGreedy){var sol2=runBaselineLSOA(ctx.P,"greedy");compareResultsStore.lsoaGreedy={sol:sol2,metrics:computeFullMetrics(sol2,ctx.demandPoints,ctx.ws),label:"LSOA Greedy"};}
-      if(checked.gaScore){var res=runGAMultiple(ctx.P,null,ctx.demandPoints,ctx.ws,"score",N);compareResultsStore.gaScore={sol:res.bestRun.sol,metrics:res.medianMetrics,stdMetrics:res.stdMetrics,label:"GA Score",N:res.N};}
-      if(checked.gaCovScore){var res2=runGAMultiple(ctx.P,null,ctx.demandPoints,ctx.ws,"covScore",N);compareResultsStore.gaCovScore={sol:res2.bestRun.sol,metrics:res2.medianMetrics,stdMetrics:res2.stdMetrics,label:"GA Cov\u2192Score",N:res2.N};}
-      if(checked.gaLex){var res3=runGAMultiple(ctx.P,null,ctx.demandPoints,ctx.ws,"lex",N);compareResultsStore.gaLex={sol:res3.bestRun.sol,metrics:res3.medianMetrics,stdMetrics:res3.stdMetrics,label:"GA Lex",N:res3.N};}
+      if(checked.gaScore){var res=runGAMultiple(ctx.P,null,ctx.demandPoints,ctx.ws,"score",Neff);compareResultsStore.gaScore={sol:res.bestRun.sol,metrics:res.medianMetrics,stdMetrics:res.stdMetrics,label:"GA Score",N:res.N};}
+      if(checked.gaCovScore){var res2=runGAMultiple(ctx.P,null,ctx.demandPoints,ctx.ws,"covScore",Neff);compareResultsStore.gaCovScore={sol:res2.bestRun.sol,metrics:res2.medianMetrics,stdMetrics:res2.stdMetrics,label:"GA Cov\u2192Score",N:res2.N};}
+      if(checked.gaLex){var res3=runGAMultiple(ctx.P,null,ctx.demandPoints,ctx.ws,"lex",Neff);compareResultsStore.gaLex={sol:res3.bestRun.sol,metrics:res3.medianMetrics,stdMetrics:res3.stdMetrics,label:"GA Lex",N:res3.N};}
       if(checked.hybrid){
         var seedSol=null;
         if(compareResultsStore.lsoaGreedy)seedSol=compareResultsStore.lsoaGreedy.sol;
@@ -892,7 +896,7 @@
         if(compareResultsStore.gaCovScore)gaE.push({key:"covScore",m:compareResultsStore.gaCovScore.metrics});
         if(compareResultsStore.gaLex)gaE.push({key:"lex",m:compareResultsStore.gaLex.metrics});
         if(gaE.length>0){var ee=gaE.map(function(e){return{label:e.key,metrics:e.m};});var bi=selectBestByDecisionMode(ee);bestGAMode=gaE[bi.bestIdx].key;}
-        var res4=runGAMultiple(ctx.P,seedSol,ctx.demandPoints,ctx.ws,bestGAMode,N);
+        var res4=runGAMultiple(ctx.P,seedSol,ctx.demandPoints,ctx.ws,bestGAMode,Neff);
         compareResultsStore.hybrid={sol:res4.bestRun.sol,metrics:res4.medianMetrics,stdMetrics:res4.stdMetrics,label:"Hybrid",N:res4.N};
       }
     }finally{candPts=saved;}
@@ -908,7 +912,7 @@
     renderComparisonTable(entries, previousRunSnapshot);
     document.getElementById("compareResults").style.display="block";
     var elapsed=((performance.now()-t0)/1000).toFixed(1);
-    var gaInfo=entries.some(function(e){return e.N;})?" (GA: "+N+" runs each)":"";
+    var gaInfo=entries.some(function(e){return e.N;})?" (GA: "+Neff+" runs each"+(Neff<N?", auto-capped":"")+")":"";
     var deltaNote=previousRunSnapshot?" | Δ = change from previous run":"";
     var modeInfo = best && best.modeLabel ? (" | Decision: "+best.modeLabel) : "";
     if(best && best.mode==="thresholdWeighted"){
@@ -1623,16 +1627,28 @@
   // Demand-weighted p90 access distance (90th percentile) — lower is better
   function computeP90AccessDist(sel, demandPoints){
     if(!sel.length || !demandPoints.length) return NaN;
-    const dists = [];
+    const rows = [];
+    let totalW = 0;
     for(const c of demandPoints){
       const exSq = Number.isFinite(c.distToExistingSq) ? c.distToExistingSq : Infinity;
       let bestSq = exSq;
       for(const s of sel){ const dSq=distSqFast(c,s); if(dSq<bestSq) bestSq=dSq; }
-      dists.push(Math.sqrt(bestSq));
+      const w = Math.max(0, num(c.demandRaw, 1));
+      const d = Math.sqrt(bestSq);
+      if(Number.isFinite(d) && Number.isFinite(w) && w > 0){
+        rows.push({d,w});
+        totalW += w;
+      }
     }
-    dists.sort((a,b)=>a-b);
-    const idx = Math.min(dists.length-1, Math.floor(0.90 * dists.length));
-    return dists[idx];
+    if(!rows.length || totalW <= 0) return NaN;
+    rows.sort((a,b)=>a.d-b.d);
+    const target = 0.90 * totalW;
+    let acc = 0;
+    for(const r of rows){
+      acc += r.w;
+      if(acc >= target) return r.d;
+    }
+    return rows[rows.length-1].d;
   }
 
   // Full metrics for a solution
@@ -1995,21 +2011,39 @@
   function lexSortDesc(a,b){if(lexIsBetter(a,b))return -1;if(lexIsBetter(b,a))return 1;return 0;}
 
   function runGA(P,seedSol,demandPoints,cache,mode){
-    const popSize=Math.max(10,Math.floor(num(document.getElementById("gaPop").value,120)));
-    const gens=Math.max(10,Math.floor(num(document.getElementById("gaGen").value,240)));
+    const basePop=Math.max(10,Math.floor(num(document.getElementById("gaPop").value,120)));
+    const baseGens=Math.max(10,Math.floor(num(document.getElementById("gaGen").value,240)));
     const mutRate=clamp01(num(document.getElementById("gaMut").value,0.45));
     const eliteRate=Math.max(0,Math.min(0.5,num(document.getElementById("gaElite").value,0.08)));
-    const evalSample=Math.max(10,Math.min(popSize,Math.floor(num(document.getElementById("gaEvalSample").value,80))));
+    const baseEvalSample=Math.max(10,Math.floor(num(document.getElementById("gaEvalSample").value,80)));
+    let popSize=basePop, gens=baseGens, evalSample=Math.min(baseEvalSample, basePop);
+
+    // Adaptive budget to keep browser responsive for large P / large candidate pools
+    const candN = candPts.length;
+    if(P > 30 || candN > 350){
+      popSize = Math.max(10, Math.min(popSize, 24));
+      gens = Math.max(20, Math.min(gens, 90));
+      evalSample = Math.max(10, Math.min(evalSample, 36, popSize));
+    }
+    if(P > 45 || candN > 500){
+      popSize = Math.max(10, Math.min(popSize, 18));
+      gens = Math.max(15, Math.min(gens, 70));
+      evalSample = Math.max(10, Math.min(evalSample, 28, popSize));
+    }
+    evalSample = Math.max(10, Math.min(popSize, evalSample));
 
     let pop=buildSeededPopulation(P,popSize,seedSol);
     let bestEval=evalGA(pop[0],demandPoints,cache,mode);
+    let stale = 0;
+    const patience = Math.max(10, Math.min(30, Math.floor(gens * 0.25)));
 
     for(let g=0;g<gens;g++){
       // eval subset
       const subLen=Math.min(evalSample,pop.length);
       const subset=pop.length<=subLen?pop:(() => {const o=pop.slice(0,Math.min(10,pop.length));while(o.length<subLen)o.push(pop[randInt(pop.length)]);return o;})();
       const scored=subset.map(sol=>evalGA(sol,demandPoints,cache,mode)).sort(lexSortDesc);
-      if(scored.length&&lexIsBetter(scored[0],bestEval)) bestEval={...scored[0],sol:scored[0].sol.slice()};
+      if(scored.length&&lexIsBetter(scored[0],bestEval)){ bestEval={...scored[0],sol:scored[0].sol.slice()}; stale=0; }
+      else stale++;
 
       const eliteCount=Math.max(1,Math.floor(eliteRate*popSize));
       const elites=scored.slice(0,Math.min(eliteCount,scored.length)).map(x=>x.sol);
@@ -2020,6 +2054,7 @@
         next.push(mutate(crossover(p1,p2,P),P,mutRate));
       }
       pop=next;
+      if(stale >= patience) break;
     }
     const bestSol=repairSolution(bestEval.sol,P);
     applyClusterCosts(bestSol); bestSol.sort((a,b)=>b.score-a.score);
