@@ -831,7 +831,21 @@
     while(lo<hi){var mid=Math.floor((lo+hi)/2);if(checkCov(mid)>=0.999)hi=mid;else lo=mid+1;}
     var el2=document.getElementById("minPResult");el2.style.display="inline-flex";
     el2.textContent="Min P = "+lo;el2.style.background="#ecfdf5";el2.style.borderColor="#059669";el2.style.color="#059669";
-    setStatus("Min P for 100% coverage: "+lo+" (greedy binary search).");
+    // Show the Min P solution on the map as Plan A
+    var saved2=candPts;candPts=saved2.filter(function(c){return !excludedSet.has(c);});
+    var minPSol=runBaselineLSOA(lo,"greedy");
+    candPts=saved2;
+    var minPMetrics=computeFullMetrics(minPSol,demandPoints,buildWorstServedCache(demandPoints));
+    planASol=minPSol;
+    setPlanLayer(planALayer,planASol,"Min P="+lo+" (greedy)");
+    clearLayer(planBLayer); planBSol=null;
+    renderBestList(planASol,"Min P="+lo+" greedy solution");
+    showUncoveredLSOAs(planASol);
+    document.getElementById("btnExportBest").disabled=false;
+    document.getElementById("btnExportBestGeo").disabled=false;
+    document.getElementById("shortlistSection").style.display="block";
+    document.getElementById("pSel").value=String(lo);
+    setStatus("Min P for 100% coverage: "+lo+" (greedy binary search).\n"+lo+" sites shown on map as Plan A \u2605.\nCoverage: "+(minPMetrics.cov*100).toFixed(1)+"%, Avg access: "+Math.round(minPMetrics.dwAvgDist)+"m, Max access: "+Math.round(minPMetrics.maxAccess)+"m");
   }
 
   // ===============================
