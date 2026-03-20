@@ -81,8 +81,8 @@
       <label class="small"><input id="ckSupply" type="checkbox" checked> Supply</label>
       <label class="small"><input id="ckLSOA" type="checkbox" checked> LSOA</label>
       <label class="small"><input id="ckCandidates" type="checkbox" checked> Candidates</label>
-      <label class="small"><input id="ckPlanA" type="checkbox" checked> Plan A ★</label>
-      <label class="small"><input id="ckPlanB" type="checkbox" checked> Plan B ◆</label>
+      <label class="small"><input id="ckPlanA" type="checkbox" checked> Plan A</label>
+      <label class="small"><input id="ckPlanB" type="checkbox" checked> Plan B</label>
     </div>
     <div class="row">
       <span class="pill active" id="tabMain">Compare</span>
@@ -188,8 +188,9 @@
         <button id="btnPSweep" class="btn secondary" style="font-size:10px;padding:4px 8px">P-sensitivity sweep</button>
       </div>
       <div id="pSweepResults" style="display:none;margin-top:6px">
-        <div style="font-weight:700;font-size:11px;margin-bottom:3px">Coverage vs P (greedy mode)</div>
-        <div id="pSweepChart" style="height:100px;background:#f9fafb;border:1px solid #eee;border-radius:6px;position:relative;overflow:hidden"></div>
+        <div style="font-weight:700;font-size:12px;margin-bottom:4px">Coverage vs Number of New Sites (greedy mode)</div>
+        <div id="pSweepChart" style="height:180px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;position:relative;overflow:hidden;padding:0"></div>
+        <div id="pSweepSummary" class="muted" style="margin-top:4px"></div>
       </div>
     </div>
   </div>
@@ -264,8 +265,8 @@
       <span style="display:inline-block;width:10px;height:10px;background:#f59e0b;margin-right:6px;border:1px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,0.12)"></span>Candidates ■ &nbsp;
       <span class="swatch" style="background:#06b6d4"></span>Auto-fill ◆ &nbsp;
       <span style="display:inline-block;width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:10px solid #10b981;margin-right:6px"></span>Custom ▲ &nbsp;
-      <span class="swatch" style="background:#ef4444"></span>Plan A ★ &nbsp;
-      <span class="swatch" style="background:#7c3aed"></span>Plan B ◆
+      <span class="swatch" style="background:#ef4444"></span>Plan A &nbsp;
+      <span class="swatch" style="background:#7c3aed"></span>Plan B
     </div>
   </div>
 </div>
@@ -845,7 +846,7 @@
     document.getElementById("btnExportBestGeo").disabled=false;
     document.getElementById("shortlistSection").style.display="block";
     document.getElementById("pSel").value=String(lo);
-    setStatus("Min P for 100% coverage: "+lo+" (greedy binary search).\n"+lo+" sites shown on map as Plan A \u2605.\nCoverage: "+(minPMetrics.cov*100).toFixed(1)+"%, Avg access: "+Math.round(minPMetrics.dwAvgDist)+"m, Max access: "+Math.round(minPMetrics.maxAccess)+"m");
+    setStatus("Min P for 100% coverage: "+lo+" (greedy binary search).\n"+lo+" sites shown on map as Plan A.\nCoverage: "+(minPMetrics.cov*100).toFixed(1)+"%, Avg access: "+Math.round(minPMetrics.dwAvgDist)+"m, Max access: "+Math.round(minPMetrics.maxAccess)+"m");
   }
 
   // ===============================
@@ -1069,8 +1070,8 @@
     supplyLayer=new google.maps.Data({map});lsoaLayer=new google.maps.Data({map});candLayer=new google.maps.Data({map});
     planALayer=new google.maps.Data({map});planBLayer=new google.maps.Data({map});
     supplyLayer.setStyle(function(ft){var h=!!ft.getProperty("_hover");var tier=ft.getProperty("speed_tier")||"Unknown";var col=speedColor(tier);var sz=h?1.1:0.85;if(tier.indexOf("Rapid")>=0||tier.indexOf("Ultra")>=0)sz=h?1.3:1.05;return{icon:iconBolt(col,sz),zIndex:800};});
-    planALayer.setStyle(function(ft){var h=!!ft.getProperty("_hover");return{icon:iconStar("#ef4444",h?1.35:1.15),zIndex:9999};});
-    planBLayer.setStyle(function(ft){var h=!!ft.getProperty("_hover");return{icon:iconDiamond("#7c3aed",h?1.0:0.85),zIndex:9998};});
+    planALayer.setStyle(function(ft){var h=!!ft.getProperty("_hover");return{icon:iconCircle("#ef4444",h?10:8,2.5),zIndex:9999};});
+    planBLayer.setStyle(function(ft){var h=!!ft.getProperty("_hover");return{icon:iconCircle("#7c3aed",h?9:7,2.5),zIndex:9998};});
     function addHover(layer){layer.addListener("mouseover",function(e){e.feature.setProperty("_hover",true);});layer.addListener("mouseout",function(e){e.feature.setProperty("_hover",false);});}
     addHover(supplyLayer);addHover(candLayer);addHover(planALayer);addHover(planBLayer);
     var _ptGuard=false;
@@ -2336,28 +2337,83 @@
     var el=document.getElementById("pSweepChart");
     el.innerHTML="";
     document.getElementById("pSweepResults").style.display="block";
-    var maxP=results[results.length-1].p;
-    var w=el.offsetWidth||300,h=el.offsetHeight||100;
-
-    // Draw bars + line
-    var html="<svg width='"+w+"' height='"+h+"' style='display:block'>";
-    var barW=Math.floor(w/results.length)-4;
-    for(var i=0;i<results.length;i++){
-      var r=results[i];
-      var x=Math.round(i*(w/results.length))+2;
-      var barH=Math.round(r.cov*h*0.85);
-      var color=r.cov>=0.999?"#059669":r.cov>=0.95?"#2563eb":"#f59e0b";
-      html+="<rect x='"+x+"' y='"+(h-barH-12)+"' width='"+barW+"' height='"+barH+"' fill='"+color+"' rx='2'/>";
-      html+="<text x='"+(x+barW/2)+"' y='"+(h-barH-14)+"' text-anchor='middle' font-size='8' font-weight='700' fill='#374151'>"+(r.cov*100).toFixed(0)+"%</text>";
-      html+="<text x='"+(x+barW/2)+"' y='"+(h-1)+"' text-anchor='middle' font-size='8' fill='#6b7280'>P="+r.p+"</text>";
-    }
-    html+="</svg>";
-    el.innerHTML=html;
+    var w=el.offsetWidth||400,h=el.offsetHeight||180;
 
     // Find saturation point
-    var satP=maxP;
+    var satP=-1;
     for(var j=0;j<results.length;j++){if(results[j].cov>=0.999){satP=results[j].p;break;}}
-    setStatus("P-sweep done. 100% coverage at P="+satP+". Green=100%, blue=95%+, amber=<95%.");
+
+    // Chart layout with margins
+    var mL=38,mR=12,mT=16,mB=28;
+    var cW=w-mL-mR, cH=h-mT-mB;
+
+    // Y-axis: find sensible min (floor to nearest 5%)
+    var minCov=1;
+    for(var k=0;k<results.length;k++){if(results[k].cov<minCov)minCov=results[k].cov;}
+    var yMin=Math.floor(minCov*20)/20; // round down to nearest 5%
+    yMin=Math.max(0,Math.min(yMin,0.9));
+    var yRange=1-yMin;
+
+    var svg="<svg width='"+w+"' height='"+h+"' style='display:block;font-family:system-ui,sans-serif'>";
+
+    // Background grid lines and Y-axis labels
+    var ySteps=5;
+    for(var s=0;s<=ySteps;s++){
+      var yVal=yMin+s*(yRange/ySteps);
+      var yPx=mT+cH-Math.round(s*(cH/ySteps));
+      svg+="<line x1='"+mL+"' y1='"+yPx+"' x2='"+(w-mR)+"' y2='"+yPx+"' stroke='#e5e7eb' stroke-width='1'/>";
+      svg+="<text x='"+(mL-4)+"' y='"+(yPx+3)+"' text-anchor='end' font-size='9' fill='#9ca3af'>"+(yVal*100).toFixed(0)+"%</text>";
+    }
+
+    // 100% reference line (dashed)
+    var y100=mT+cH-Math.round(((1-yMin)/yRange)*cH);
+    svg+="<line x1='"+mL+"' y1='"+y100+"' x2='"+(w-mR)+"' y2='"+y100+"' stroke='#059669' stroke-width='1' stroke-dasharray='4,3' opacity='0.5'/>";
+
+    // Bars
+    var barGap=4;
+    var barW=Math.max(12,Math.floor(cW/results.length)-barGap);
+    var barStep=cW/results.length;
+    for(var i=0;i<results.length;i++){
+      var r=results[i];
+      var barH=Math.max(1,Math.round(((r.cov-yMin)/yRange)*cH));
+      var x=mL+Math.round(i*barStep+(barStep-barW)/2);
+      var y=mT+cH-barH;
+      var isSat=r.cov>=0.999;
+      var color=isSat?"#059669":r.cov>=0.95?"#3b82f6":"#f59e0b";
+
+      // Bar with rounded top
+      svg+="<rect x='"+x+"' y='"+y+"' width='"+barW+"' height='"+barH+"' fill='"+color+"' rx='3' ry='3'/>";
+      // Flat bottom fix
+      if(barH>6)svg+="<rect x='"+x+"' y='"+(y+barH-3)+"' width='"+barW+"' height='3' fill='"+color+"'/>";
+
+      // Value label on top
+      svg+="<text x='"+(x+barW/2)+"' y='"+(y-4)+"' text-anchor='middle' font-size='9' font-weight='600' fill='"+color+"'>"+(r.cov*100).toFixed(1)+"%</text>";
+
+      // X-axis label
+      svg+="<text x='"+(x+barW/2)+"' y='"+(h-6)+"' text-anchor='middle' font-size='9' fill='#6b7280'>"+r.p+"</text>";
+
+      // Saturation marker (first bar that hits 100%)
+      if(satP>0&&r.p===satP){
+        svg+="<line x1='"+(x+barW/2)+"' y1='"+(y-2)+"' x2='"+(x+barW/2)+"' y2='"+(mT-2)+"' stroke='#059669' stroke-width='1.5' stroke-dasharray='3,2'/>";
+        svg+="<text x='"+(x+barW/2)+"' y='"+(mT-1)+"' text-anchor='middle' font-size='9' font-weight='700' fill='#059669'>P="+satP+"</text>";
+      }
+    }
+
+    // X-axis title
+    svg+="<text x='"+(mL+cW/2)+"' y='"+(h-0)+"' text-anchor='middle' font-size='9' fill='#9ca3af'>Number of new sites (P)</text>";
+
+    svg+="</svg>";
+    el.innerHTML=svg;
+
+    // Summary text
+    var sumEl=document.getElementById("pSweepSummary");
+    if(satP>0){
+      sumEl.innerHTML="<span style='color:#059669;font-weight:700'>Saturation at P="+satP+"</span> — "+satP+" new greedy-placed sites achieve 100% demand coverage. "
+        +"<span style='color:#6b7280'>Green = 100%, Blue = 95–99%, Amber = &lt;95%.</span>";
+    }else{
+      sumEl.innerHTML="<span style='color:#dc2626;font-weight:700'>100% coverage not reached</span> within P=5–60 range.";
+    }
+    setStatus("P-sweep done."+(satP>0?" Saturation at P="+satP+".":""));
   }
 
   // ===============================
